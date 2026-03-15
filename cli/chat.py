@@ -2,7 +2,6 @@ import click
 import asyncio
 from adapters.config.file_config import FileConfig
 from adapters.chat.registry import registry
-import adapters.chat  # Ensure platforms are registered
 
 @click.group(name="chat")
 def chat_group():

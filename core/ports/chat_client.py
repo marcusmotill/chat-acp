@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator
-from core.models import Session, Workspace, ChatMessage
+from core.models import Session, Workspace
 
 class ChatClientProtocol(ABC):
     """

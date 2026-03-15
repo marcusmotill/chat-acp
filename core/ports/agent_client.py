@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, Dict, Any
+from typing import AsyncGenerator
 from core.models import Session, Workspace
 
 class AgentClientProtocol(ABC):

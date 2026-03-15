@@ -3,7 +3,7 @@ import discord
 import asyncio
 from discord.ext import commands
 from typing import AsyncGenerator
-from core.models import Session, Workspace, ChatMessage, Environment
+from core.models import Session, Workspace, ChatMessage
 from core.ports.chat_client import ChatClientProtocol
 
 logger = logging.getLogger(__name__)
@@ -239,7 +239,7 @@ class WorkspaceCog(commands.Cog):
             str(ctx.channel_id), 
             ctx.channel.name if hasattr(ctx.channel, 'name') else "Agent Session"
         )
-        await ctx.respond(f"📝 **Message added to queue**.")
+        await ctx.respond("📝 **Message added to queue**.")
 
     @commands.slash_command(name="clear-queue", description="Clear all pending messages in the queue.")
     async def clear_queue(self, ctx: discord.ApplicationContext):

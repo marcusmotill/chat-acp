@@ -92,7 +92,8 @@ class FileConfig(ConfigProtocol):
                 # 1. discord_bot_token (legacy root) -> discord.token (new namespaced)
                 if "discord_bot_token" in loaded_data:
                     logger.info("Migrating root 'discord_bot_token' to 'discord.token'")
-                    if "discord" not in loaded_data: loaded_data["discord"] = {}
+                    if "discord" not in loaded_data:
+                        loaded_data["discord"] = {}
                     loaded_data["discord"]["token"] = loaded_data.pop("discord_bot_token")
 
                 # 2. bot_token (platform subkey) -> token (generic namespaced key)
@@ -109,12 +110,14 @@ class FileConfig(ConfigProtocol):
                         # If it was already namespaced by platform (like the last implementation)
                         if "discord" in ws_root:
                             logger.info("Migrating 'workspaces.discord' to 'discord.workspaces'")
-                            if "discord" not in loaded_data: loaded_data["discord"] = {}
+                            if "discord" not in loaded_data:
+                                loaded_data["discord"] = {}
                             loaded_data["discord"]["workspaces"] = ws_root["discord"]
                         else:
                             # It was a flat dict channel_id -> path
                             logger.info("Migrating flat 'workspaces' to 'discord.workspaces'")
-                            if "discord" not in loaded_data: loaded_data["discord"] = {}
+                            if "discord" not in loaded_data:
+                                loaded_data["discord"] = {}
                             loaded_data["discord"]["workspaces"] = ws_root
 
                 self.data.update(loaded_data)
