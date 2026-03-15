@@ -13,6 +13,10 @@ class MockChatClient(ChatClientProtocol):
         self.sent_messages = []
         self.streamed_chunks = []
         
+    @property
+    def config_key(self) -> str:
+        return "mock"
+
     async def start(self) -> None:
         pass
         
@@ -132,7 +136,7 @@ async def test_session_manager_abort():
     manager.register_workspace("ws_1", workspace)
     
     # Start a prompt
-    task = asyncio.create_task(manager.handle_chat_message(
+    asyncio.create_task(manager.handle_chat_message(
         ChatMessage(id="m1", session_id="s1", content="Long task", author_id="u", author_name="A"),
         "ws_1", "s1", "S1"
     ))

@@ -54,13 +54,13 @@ class FileConfig(ConfigProtocol):
     Default path is ~/.chat-acp/config.json
     """
     def __init__(self, config_path: str = None):
-        if config_path is None:
+        if config_path:
+            self.config_path = str(Path(config_path).absolute())
+            self.config_dir = os.path.dirname(self.config_path)
+        else:
             self.home_dir = Path.home()
             self.config_dir = str(self.home_dir / ".chat-acp")
             self.config_path = str(Path(self.config_dir) / "config.json")
-        else:
-            self.config_path = config_path
-            self.config_dir = os.path.dirname(self.config_path)
 
         # Start with generic structure; platforms like 'discord' are added dynamically
         self.data: Dict = {
@@ -92,7 +92,8 @@ class FileConfig(ConfigProtocol):
                 # 1. discord_bot_token (legacy root) -> discord.token (new namespaced)
                 if "discord_bot_token" in loaded_data:
                     logger.info("Migrating root 'discord_bot_token' to 'discord.token'")
-                    if "discord" not in loaded_data: loaded_data["discord"] = {}
+                    if "discord" not in loaded_data:
+                        loaded_data["discord"] = {}
                     loaded_data["discord"]["token"] = loaded_data.pop("discord_bot_token")
 
                 # 2. bot_token (platform subkey) -> token (generic namespaced key)
@@ -109,12 +110,14 @@ class FileConfig(ConfigProtocol):
                         # If it was already namespaced by platform (like the last implementation)
                         if "discord" in ws_root:
                             logger.info("Migrating 'workspaces.discord' to 'discord.workspaces'")
-                            if "discord" not in loaded_data: loaded_data["discord"] = {}
+                            if "discord" not in loaded_data:
+                                loaded_data["discord"] = {}
                             loaded_data["discord"]["workspaces"] = ws_root["discord"]
                         else:
                             # It was a flat dict channel_id -> path
                             logger.info("Migrating flat 'workspaces' to 'discord.workspaces'")
-                            if "discord" not in loaded_data: loaded_data["discord"] = {}
+                            if "discord" not in loaded_data:
+                                loaded_data["discord"] = {}
                             loaded_data["discord"]["workspaces"] = ws_root
 
                 self.data.update(loaded_data)

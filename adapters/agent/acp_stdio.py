@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Dict, Any, Optional
 
 from core.models import Session, Workspace
 from core.ports.agent_client import AgentClientProtocol
-from adapters.agent.jsonrpc import JsonRpcRequest, JsonRpcNotification, JsonRpcResponse
+from adapters.agent.jsonrpc import JsonRpcNotification, JsonRpcResponse
 
 logger = logging.getLogger(__name__)
 

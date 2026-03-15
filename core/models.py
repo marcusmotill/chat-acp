@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any
 
 class Environment(BaseModel):
     """
