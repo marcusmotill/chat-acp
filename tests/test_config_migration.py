@@ -1,7 +1,5 @@
 import pytest
 import json
-import os
-from pathlib import Path
 from adapters.config.file_config import FileConfig
 
 @pytest.fixture

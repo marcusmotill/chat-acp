@@ -1,7 +1,6 @@
 import pytest
 from click.testing import CliRunner
 from cli.main import cli
-from adapters.config.file_config import FileConfig
 import json
 
 @pytest.fixture

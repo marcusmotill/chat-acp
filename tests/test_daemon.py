@@ -1,8 +1,6 @@
 import pytest
-import os
 import signal
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from cli.daemon import DaemonManager
 
 @pytest.fixture
@@ -18,10 +16,10 @@ def test_pid_file_handling(temp_daemon_manager, tmp_path):
     
     # Test log file creation
     log_file = temp_daemon_manager._get_log_file(platform)
-    assert log_file.exists() == False
+    assert not log_file.exists()
     log_file.parent.mkdir(parents=True, exist_ok=True)
     log_file.touch()
-    assert log_file.exists() == True
+    assert log_file.exists()
 
 @patch("subprocess.Popen")
 @patch("os.kill")
@@ -48,7 +46,7 @@ def test_daemon_stop(mock_kill, mock_popen, temp_daemon_manager):
     assert not pid_file.exists()
 
 def test_daemon_status_not_running(temp_daemon_manager):
-    assert temp_daemon_manager.status("missing") == False
+    assert not temp_daemon_manager.status("missing")
 
 @patch("os.kill")
 def test_is_running(mock_kill, temp_daemon_manager):
@@ -58,8 +56,8 @@ def test_is_running(mock_kill, temp_daemon_manager):
     
     # Success (process exists)
     mock_kill.return_value = None
-    assert temp_daemon_manager.is_running(platform) == True
+    assert temp_daemon_manager.is_running(platform)
     
     # Failure (process doesn't exist)
     mock_kill.side_effect = ProcessLookupError()
-    assert temp_daemon_manager.is_running(platform) == False
+    assert not temp_daemon_manager.is_running(platform)

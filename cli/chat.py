@@ -44,6 +44,12 @@ def start_chat(ctx, platform_name: str, detach: bool):
         return
 
     try:
+        import setproctitle
+        setproctitle.setproctitle(f"chat-acp: {platform_name}")
+    except ImportError:
+        pass
+
+    try:
         platform = registry.get_platform(platform_name)
         click.echo(f"Initializing {platform_name}...")
         asyncio.run(platform.start(config))
