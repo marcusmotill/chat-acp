@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "discord-bot-architect": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "e38b1a183702af4aa7762e689da2f21aea232455a6191c80d0aad5d3562fff94"
+    }
+  }
+}
