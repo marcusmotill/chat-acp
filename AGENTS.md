@@ -23,17 +23,19 @@ The bot maintains a local configuration in `~/.chat-acp/config.json`. This path 
 
 ```json
 {
-    "agent_command": ["opencode", "acp"],
-    "workspaces": {
-        "discord": {
+    "discord": {
+        "token": "your_token",
+        "workspaces": {
             "123456789012345678": "/Users/user/projects/my-app"
         }
-    }
+    },
+    "agent_command": ["opencode", "acp"]
 }
 ```
 
 - `agent_command`: A list of strings representing the CLI command used to spawn the ACP agent.
-- `workspaces`: A nested mapping where the first key is the platform (e.g., `discord`) and the inner key-value pair is the **Channel ID** and the **Absolute Path** to the local workspace.
+- `workspaces`: A nested mapping where the first key is the platform (e.g., `discord`) and the inner key-value pair is the **Channel ID** and the **Absolute Path** to the local workspace. Standardized across all platforms.
+- `token`: The authentication token for the specific platform.
 
 ## Development
 - Managed via `uv`. Use `uv add <dependency>` to manage requirements.

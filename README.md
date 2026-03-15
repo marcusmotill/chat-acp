@@ -1,5 +1,5 @@
 # 🌉 Chat ACP Bridge
-> **Bridge your favorite chat platforms with Agent Client Protocol (ACP) CLI agents.**
+> **A universal bridge connecting generic chat platform adapters with ACP-compliant CLI agents.**
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -7,82 +7,80 @@
 
 ---
 
-**Chat ACP Bridge** is a robust, protocol-compliant bridge that connects high-fidelity chat interfaces (like Discord) directly to Agent Client Protocol (ACP) compliant CLI agents (such as `claude-code`, linting agents, or custom ACP implementations).
+**Chat ACP Bridge** is a highly modular, protocol-compliant proxy built on the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It allows you to wrap existing CLI-based agents (like `claude-code`) and expose them through rich chat interfaces (like Discord), handling process lifecycle, streaming, and workspace mapping automatically.
 
-It acts as a **stateless proxy**, managing the lifecycle of agent processes, routing prompts, and streaming intermediate thoughts and tool calls natively back to your chat platform.
+## 🏛️ Core Architecture
 
-## ✨ Key Features
+The bridge is designed using clean architecture (Hexagonal) to ensure the core orchestrator remains agnostic of both the chat platform and the specific AI model:
 
-- **🚀 Protocol Compliant**: Full implementation of the ACP JSON-RPC 2.0 specification.
-- **⚡ Real-time Streaming**: Native Discord streaming with "typing..." indicators and status hooks for tool calls and internal planning.
-- **📁 Workspace Persistence**: Remembers your channel-to-local-directory mappings automatically in `~/.chat-acp/config.json`.
-- **🧵 Thread-Isolated Sessions**: Each Discord thread is mapped to a unique, isolated agent session.
-- **🔧 Agent Agnostic**: Works with *any* CLI that supports the standard ACP stdio interface.
-- **📦 Modern Stack**: Built with `Python 3.13`, `pycord`, and managed by `uv`.
+- **Core**: Handles session management, process execution, and JSON-RPC 2.0 protocol logic.
+- **Chat Adapters**: Platform-specific implementations (e.g., Discord) that map chat events to ACP prompts.
+- **Agent Adapters**: Subprocess managers that communicate with CLI agents via standard I/O.
+- **Config Store**: A shared, file-based persistence layer for tokens and workspace mappings.
 
-## 🛠️ Prerequisites
+---
 
-- **Python**: 3.13 or higher.
-- **[uv](https://github.com/astral-sh/uv)**: Sub-second Python package management.
-- **Discord Bot**: A token for a bot with `Message Content` and `Server Members` intents enabled.
-- **ACP Agent**: An installed ACP CLI (e.g., `npm install -g @anthropic-ai/claude-code`).
+## 🚀 Setup & Configuration
 
-## 🚀 Quick Start
+The bridge prioritizes a **Configuration-First** approach. Most settings should be defined in the central configuration file.
 
 ### 1. Installation
-Clone the repository and sync the environment:
+Clone the repository and sync dependencies using `uv`:
 ```bash
 git clone https://github.com/marcusmotill/chat-apc.git
 cd chat-apc
 uv sync
 ```
 
-### 2. Configuration
-Create a `.env` file for your secret tokens:
-```env
-DISCORD_TOKEN=your_bot_token_here
-AGENT_COMMAND="opencode acp"  # Or "npx claude-code --acp"
-```
+### 2. Primary Configuration
+The bridge reads from `~/.chat-acp/config.json`. This file is automatically created and migrated on first run.
 
-### 3. Execution
-Launch the bridge daemon:
-```bash
-uv run main.py
-```
-
-## 🎮 Usage in Discord
-
-Once the bot is online, use the native slash commands to manage your developer environment:
-
-- `/add-workspace <path>` — Map the current channel to a local project directory. **Saved permanently.**
-- `/ask <question>` — Send a dedicated prompt to the agent.
-- `/abort` — Forcefully stop the current agent turn and clear the execution queue.
-- `/clear` — Wipe the agent's context and restart the session.
-
-## 📁 Persistence Specification
-
-The bridge maintains a lightweight configuration at `~/.chat-acp/config.json`. This path is resolved automatically using the user's home directory on all platforms (Mac, Windows, and Linux).
-
+**Standardized Schema:**
 ```json
 {
-    "agent_command": ["opencode", "acp"],
-    "workspaces": {
-        "discord": {
-            "123456789012345678": "/Users/dev/projects/ai-bridge"
+    "agent_command": ["npx", "-y", "@anthropic-ai/claude-code", "--acp"],
+    "discord": {
+        "token": "your_discord_bot_token",
+        "workspaces": {
+            "channel_id": "/absolute/path/to/project"
         }
     }
 }
 ```
 
+- **`agent_command`**: The CLI command to spawn the ACP agent.
+- **`any-platform.token`**: The authentication token for the specific adapter.
+- **`any-platform.workspaces`**: Standardized mapping of Chat ID -> Local File Path.
+
+### 3. Environment Variables (Secret Overrides)
+For security, tokens can be supplied via environment variables or a `.env` file:
+- `DISCORD_TOKEN` or `DISCORD_BOT_TOKEN`
+- `AGENT_COMMAND`
+
 ---
 
-## 🏗️ Architecture
+## 🎭 Chat Platform Adapters
 
-The system follows a clean "Hexagonal" architecture:
-- **Core**: Protocol handling, orchestrator, and session lifecycle logic.
-- **Adapters (Chat)**: Discord message mapping to ACP events.
-- **Adapters (Agent)**: Subprocess management and JSON-RPC stdio parsing.
-- **Persistence**: File-based storage for workspace mappings.
+### 🪐 Discord Implementation
+The Discord adapter (`adapters/chat/discord/`) provides a full-featured interface:
+
+**Slash Commands:**
+- `/add-workspace <path>` — Map a channel to a local project directory. **Saved to config.**
+- `/ask <question>` — Send a specific prompt to the agent.
+- `/abort` — Stop the current agent process and clear the queue.
+- `/clear` — Wipe session history and restart the agent process.
+
+**Rich Features:**
+- **Real-time Streaming**: Edits messages in real-time as the agent thinks.
+- **Typing Indicators**: Stays active while the agent is processing or calling tools.
+- **Threading**: Uses Discord Threads for isolated, per-conversation agent sessions.
+
+---
+
+## 🔧 Infrastructure
+- **Python**: 3.13+
+- **Process Management**: `subprocess.Popen` for persistent stdio streams.
+- **Package Manager**: [uv](https://github.com/astral-sh/uv)
 
 ---
 *Built with ❤️ for the AI developer ecosystem.*

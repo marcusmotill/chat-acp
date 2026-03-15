@@ -11,9 +11,12 @@ logger = logging.getLogger(__name__)
 class DiscordCommandBot(commands.Bot, ChatClientProtocol):
     """
     Discord implementation of the ChatClientProtocol using pycord.
-    Runs as a daemon mapping Discord concepts to core structures.
     """
     
+    @property
+    def config_key(self) -> str:
+        return "discord"
+
     def __init__(self, token: str, orchestrator_callback):
         """
         orchestrator_callback: async func(message: ChatMessage, chat_workspace_id: str, chat_session_id: str, chat_session_name: str)

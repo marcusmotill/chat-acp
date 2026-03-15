@@ -7,6 +7,12 @@ class ChatClientProtocol(ABC):
     Interface for any chat client (e.g., Discord) connecting to the bridge.
     """
     
+    @property
+    @abstractmethod
+    def config_key(self) -> str:
+        """The configuration key used by this client (e.g., 'discord')."""
+        pass
+
     @abstractmethod
     async def start(self) -> None:
         """Starts the chat bot daemon."""

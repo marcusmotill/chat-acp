@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from core.models import Workspace
 from core.orchestrator import SessionManager
 from adapters.agent.acp_stdio import AcpStdioAgent
-from adapters.chat.discord_bot import DiscordCommandBot
+from adapters.chat.discord.bot import DiscordCommandBot
 from adapters.config.file_config import FileConfig
 
 logging.basicConfig(level=logging.INFO)
@@ -14,15 +14,28 @@ logger = logging.getLogger(__name__)
 
 async def run():
     load_dotenv()
-    
-    discord_token = os.environ.get("DISCORD_TOKEN")
-    if not discord_token:
-        logger.error("Missing DISCORD_TOKEN in environment")
-        return
-
     logger.info("Initializing configuration...")
     config = FileConfig()
     config.load()
+    
+    # Priority: Env > Config
+    # Supporting both DISCORD_BOT_TOKEN and legacy DISCORD_TOKEN
+    discord_env_token = os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get("DISCORD_TOKEN")
+    
+    from adapters.chat.discord.config import DiscordConfig
+    discord_config = DiscordConfig(config.for_platform("discord"))
+    
+    if discord_env_token:
+        discord_config.token = discord_env_token
+    else:
+        discord_token = discord_config.token
+    
+    # Final token used for bot initialization
+    discord_token = discord_env_token or discord_config.token
+
+    if not discord_token:
+        logger.error("Missing DISCORD_BOT_TOKEN (or DISCORD_TOKEN) in environment or config")
+        return
 
     # Priority: Env > Config > Default
     env_command = os.environ.get("AGENT_COMMAND")
@@ -44,7 +57,7 @@ async def run():
     orchestrator = SessionManager(
         chat_adapter=bot,
         agent_factory=create_agent,
-        on_workspace_registered=lambda cid, path: config.add_workspace("discord", cid, path)
+        on_workspace_registered=lambda cid, path: discord_config.add_workspace(cid, path)
     )
 
     # Wire the callbacks
@@ -52,7 +65,7 @@ async def run():
     bot.orchestrator = orchestrator
 
     # Register Workspaces from Config
-    persisted_workspaces = config.get_workspaces("discord")
+    persisted_workspaces = discord_config.get_workspaces()
     for cid, target_path in persisted_workspaces.items():
         workspace = Workspace(
             id=cid,
