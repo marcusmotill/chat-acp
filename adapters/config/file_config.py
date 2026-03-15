@@ -54,13 +54,13 @@ class FileConfig(ConfigProtocol):
     Default path is ~/.chat-acp/config.json
     """
     def __init__(self, config_path: str = None):
-        if config_path is None:
+        if config_path:
+            self.config_path = str(Path(config_path).absolute())
+            self.config_dir = os.path.dirname(self.config_path)
+        else:
             self.home_dir = Path.home()
             self.config_dir = str(self.home_dir / ".chat-acp")
             self.config_path = str(Path(self.config_dir) / "config.json")
-        else:
-            self.config_path = config_path
-            self.config_dir = os.path.dirname(self.config_path)
 
         # Start with generic structure; platforms like 'discord' are added dynamically
         self.data: Dict = {

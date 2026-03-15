@@ -12,11 +12,15 @@ This Python framework acts strictly as an **ACP Client**. We use `subprocess.Pop
 3. **Session**: An ephemeral agent execution context. When a user asks a question in a workspace (Channel), a **Discord Thread** is created to represent the Session. The subprocess for the agent is launched, and its stdio is kept alive for the duration of the thread.
 
 ## Discord Implementation (`pycord`)
-- The bot runs as a background *daemon*, holding onto the active sessions. 
-- A message in a thread routes into the agent session via JSON-RPC `session/prompt`.
-- The agent's `session/update` JSON-RPC notifications stream back as Discord messages or edits.
-- Use `pycord` for discord bot implementations with slash commands for things like `/add-workspace`.
+## CLI & Daemon (`chat-acp`)
+- The bot can be run as a background daemon using the CLI.
+- Commands: 
+  - `chat-acp chat start <platform> [-d]` - Start a bot (use `-d` to detach).
+  - `chat-acp chat stop <platform>` - Stop a background bot.
+  - `chat-acp chat status <platform>` - Check if a bot is running.
+  - `chat-acp workspace ls/add` - Manage project mappings.
 - **Persistence**: Workspace mappings and settings are stored in `~/.chat-acp/config.json`.
+- **PIDs**: Background process PIDs are tracked in `~/.chat-acp/pids/`.
 
 ## Configuration Specification
 The bot maintains a local configuration in `~/.chat-acp/config.json`. This path is resolved using the universal home directory for cross-platform support (Mac, Windows, and Linux), allowing the bot to "remember" its state across restarts.

@@ -7,80 +7,72 @@
 
 ---
 
-**Chat ACP Bridge** is a highly modular, protocol-compliant proxy built on the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It allows you to wrap existing CLI-based agents (like `claude-code`) and expose them through rich chat interfaces (like Discord), handling process lifecycle, streaming, and workspace mapping automatically.
+**Chat ACP Bridge** is a highly modular, protocol-compliant proxy built on the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It allows you to wrap existing CLI-based agents (like `claude-code`) and expose them through rich chat interfaces (like Discord).
 
-## 🏛️ Core Architecture
-
-The bridge is designed using clean architecture (Hexagonal) to ensure the core orchestrator remains agnostic of both the chat platform and the specific AI model:
-
-- **Core**: Handles session management, process execution, and JSON-RPC 2.0 protocol logic.
-- **Chat Adapters**: Platform-specific implementations (e.g., Discord) that map chat events to ACP prompts.
-- **Agent Adapters**: Subprocess managers that communicate with CLI agents via standard I/O.
-- **Config Store**: A shared, file-based persistence layer for tokens and workspace mappings.
-
----
-
-## 🚀 Setup & Configuration
-
-The bridge prioritizes a **Configuration-First** approach. Most settings should be defined in the central configuration file.
+## 🚀 Quick Start
 
 ### 1. Installation
-Clone the repository and sync dependencies using `uv`:
+Install globally using `uvx` (recommended) or clone the repo:
 ```bash
+# Via UVX
+uvx --from git+https://github.com/marcusmotill/chat-apc.git chat-acp --help
+
+# Or via Source
 git clone https://github.com/marcusmotill/chat-apc.git
 cd chat-apc
 uv sync
 ```
 
-### 2. Primary Configuration
-The bridge reads from `~/.chat-acp/config.json`. This file is automatically created and migrated on first run.
+### 2. Configuration
+The bridge reads from `~/.chat-acp/config.json`. You can view or set config via the CLI:
+```bash
+uv run chat-acp config
+```
 
-**Standardized Schema:**
+Example `config.json`:
 ```json
 {
     "agent_command": ["npx", "-y", "@anthropic-ai/claude-code", "--acp"],
     "discord": {
-        "token": "your_discord_bot_token",
-        "workspaces": {
-            "channel_id": "/absolute/path/to/project"
-        }
+        "token": "your_token",
+        "workspaces": {}
     }
 }
 ```
 
-- **`agent_command`**: The CLI command to spawn the ACP agent.
-- **`any-platform.token`**: The authentication token for the specific adapter.
-- **`any-platform.workspaces`**: Standardized mapping of Chat ID -> Local File Path.
+### 3. Usage
+Start the Discord bot in the background:
+```bash
+uv run chat-acp chat start discord -d
+```
 
-### 3. Environment Variables (Secret Overrides)
-For security, tokens can be supplied via environment variables or a `.env` file:
-- `DISCORD_TOKEN` or `DISCORD_BOT_TOKEN`
-- `AGENT_COMMAND`
+Check status:
+```bash
+uv run chat-acp chat status discord
+```
 
----
-
-## 🎭 Chat Platform Adapters
-
-### 🪐 Discord Implementation
-The Discord adapter (`adapters/chat/discord/`) provides a full-featured interface:
-
-**Slash Commands:**
-- `/add-workspace <path>` — Map a channel to a local project directory. **Saved to config.**
-- `/ask <question>` — Send a specific prompt to the agent.
-- `/abort` — Stop the current agent process and clear the queue.
-- `/clear` — Wipe session history and restart the agent process.
-
-**Rich Features:**
-- **Real-time Streaming**: Edits messages in real-time as the agent thinks.
-- **Typing Indicators**: Stays active while the agent is processing or calling tools.
-- **Threading**: Uses Discord Threads for isolated, per-conversation agent sessions.
+Stop the bot:
+```bash
+uv run chat-acp chat stop discord
+```
 
 ---
 
-## 🔧 Infrastructure
-- **Python**: 3.13+
-- **Process Management**: `subprocess.Popen` for persistent stdio streams.
-- **Package Manager**: [uv](https://github.com/astral-sh/uv)
+## 🏛️ Core Architecture
+
+The bridge is designed using clean architecture (Hexagonal):
+
+- **Registry**: Dynamically loads chat platform adapters (Discord, etc.).
+- **Core Orchestrator**: Handles session management and JSON-RPC protocol logic.
+- **CLI**: Docker-like interface for process management and configuration.
+
+---
+
+## 🪐 Discord Implementation
+The Discord adapter provide:
+- **Slash Commands**: `/add-workspace`, `/ask`, `/abort`, `/clear`.
+- **Real-time Streaming**: Edits messages as the agent thinks.
+- **Threading**: Uses Discord Threads for isolated sessions.
 
 ---
 *Built with ❤️ for the AI developer ecosystem.*
