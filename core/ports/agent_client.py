@@ -1,12 +1,23 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, List, Dict, Any
+from typing import AsyncGenerator, Dict, Any, List, Callable, Awaitable
+
 from core.models import Session, Workspace
+
+# Define a type for the callback function that the agent uses to request user action
+PromptTurnCallback = Callable[[Session, Dict[str, Any]], Awaitable[Dict[str, Any]]]
+
 
 class AgentClientProtocol(ABC):
     """
-    Interface for communicating with an ACP compatible agent via a subprocess.
+    Abstract Base Class for Agent Client Adapter.
+    Defines the contract for communicating with an ACP agent.
     """
-    
+
+    @abstractmethod
+    def set_user_interaction_callback(self, callback: PromptTurnCallback) -> None:
+        """Sets the function to call when the agent needs user action (e.g., prompt_turn)."""
+        pass
+
     @abstractmethod
     async def start_session(self, session: Session, workspace: Workspace) -> None:
         """
@@ -32,10 +43,12 @@ class AgentClientProtocol(ABC):
         """Returns the available configuration options (e.g. models) for the session."""
         ...
 
-    async def set_config_option(self, session: Session, config_id: str, value: Any) -> Any:
+    async def set_config_option(
+        self, session: Session, config_id: str, value: Any
+    ) -> Any:
         """Sets a configuration option for the session."""
         ...
-        
+
     @abstractmethod
     async def stop_session(self, session: Session) -> None:
         """

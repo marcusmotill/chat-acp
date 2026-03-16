@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any
 
 from core.models import Session, Workspace, ChatMessage
 from core.ports.agent_client import AgentClientProtocol
@@ -97,6 +97,8 @@ class SessionContext:
 
         logger.debug(f"Starting new agent for session {self.session.id}")
         self.agent = self.agent_factory(self.workspace)
+        # Set the callback for agent-initiated requests (e.g., prompt_turn)
+        self.agent.set_user_interaction_callback(self._handle_agent_prompt_turn)
         await self.agent.start_session(self.session, self.workspace)
 
         if self.initial_model:
@@ -109,6 +111,29 @@ class SessionContext:
                 )
             except Exception as e:
                 logger.warning(f"Failed to auto-apply model {self.initial_model}: {e}")
+
+    async def _handle_agent_prompt_turn(
+        self, session: Session, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Handles an incoming prompt_turn request from the Agent.
+        This blocks and delegates to the chat adapter to get user input.
+        """
+        if session.id != self.session.id:
+            logger.error("Mismatched session IDs in prompt_turn callback.")
+            # Return an error response that the agent can handle
+            return {
+                "action": {"type": "text", "content": "Error: Session ID mismatch."}
+            }
+
+        try:
+            return await self.chat_adapter.await_action_from_user(self.session, params)
+        except Exception as e:
+            logger.exception(
+                f"Error handling prompt_turn for session {self.session.id}"
+            )
+            # Return an error response that the agent can handle
+            return {"action": {"type": "text", "content": f"Error: {e}"}}
 
     async def abort(self) -> None:
         """Aborts the current action and stops the agent."""

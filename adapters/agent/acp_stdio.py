@@ -5,7 +5,7 @@ import logging
 from typing import AsyncGenerator, Dict, Any, Optional, List
 
 from core.models import Session, Workspace
-from core.ports.agent_client import AgentClientProtocol
+from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
 from core.exceptions import AgentInitializationError, AgentExecutionError
 from adapters.agent.jsonrpc import JsonRpcNotification, JsonRpcResponse
 
@@ -22,6 +22,7 @@ class JsonRpcMethods:
     SESSION_SET_MODE = "session/set_mode"
     SESSION_SET_MODEL = "session/set_model"
     SESSION_SET_DASH_MODEL = "session/set-model"
+    PROMPT_TURN = "prompt_turn"
 
 
 class AcpStdioAgent(AgentClientProtocol):
@@ -48,76 +49,12 @@ class AcpStdioAgent(AgentClientProtocol):
         self._agent_session_id: Optional[str] = None
         self._config_options: List[Dict[str, Any]] = []
         self._successful_model_method: Optional[str] = None
+        self._prompt_turn_callback: Optional[PromptTurnCallback] = None
+        self._session: Optional[Session] = None
 
-    async def _listen_stdout(self):
-        """Reads stdout line by line, parsing Json RPC."""
-        if not self.process or not self.process.stdout:
-            return
-
-        while True:
-            line = await self.process.stdout.readline()
-            if not line:
-                break
-
-            try:
-                data = json.loads(line.decode().strip())
-                # Handle Response
-                if "id" in data and ("result" in data or "error" in data):
-                    resp = JsonRpcResponse(**data)
-                    fut = self._pending_requests.pop(resp.id, None)
-                    if fut and not fut.done():
-                        fut.set_result(resp)
-                # Handle Notification
-                elif "method" in data and "id" not in data:
-                    notif = JsonRpcNotification(**data)
-                    if notif.method == JsonRpcMethods.SESSION_UPDATE:
-                        # The update itself is nested in params['update']
-                        await self._update_queue.put(notif)
-                else:
-                    logger.debug(f"Agent Notification/Request: {data}")
-            except json.JSONDecodeError:
-                # If it's not JSON, route to normal logger
-                text = line.decode().strip()
-                if text:
-                    logger.debug(f"AGENT STDOUT: {text}")
-            except Exception as e:
-                logger.error(f"Error parsing agent output: {e}\nLine: {line.decode()}")
-
-        logger.info("Agent stdout closed.")
-        self._cleanup_pending_requests("Agent process terminated.")
-
-    async def _listen_stderr(self):
-        """Reads stderr line by line and logs it."""
-        if not self.process or not self.process.stderr:
-            return
-
-        while True:
-            line = await self.process.stderr.readline()
-            if not line:
-                break
-            text = line.decode().strip()
-            if text:
-                logger.info(f"AGENT STDERR: {text}")
-
-    def _cleanup_pending_requests(self, reason: str):
-        """Resolves all pending requests with an error."""
-        for req_id, fut in list(self._pending_requests.items()):
-            if not fut.done():
-                resp = JsonRpcResponse(
-                    id=req_id, error={"code": -32000, "message": reason}
-                )
-                fut.set_result(resp)
-        self._pending_requests.clear()
-
-    async def send_notification(
-        self, method: str, params: Optional[Dict[str, Any]] = None
-    ) -> None:
-        payload = {"jsonrpc": "2.0", "method": method, "params": params}
-        raw_req = json.dumps(payload) + "\n"
-        logger.debug(f">>> SEND NOTIFICATION: {raw_req.strip()}")
-        if self.process and self.process.stdin:
-            self.process.stdin.write(raw_req.encode())
-            await self.process.stdin.drain()
+    def set_user_interaction_callback(self, callback: PromptTurnCallback) -> None:
+        """Sets the function to call when the agent needs user action (e.g., prompt_turn)."""
+        self._prompt_turn_callback = callback
 
     async def send_request(
         self, method: str, params: Optional[Dict[str, Any]] = None
@@ -143,6 +80,7 @@ class AcpStdioAgent(AgentClientProtocol):
         logger.info(
             f"Starting agent with command: {' '.join(self.agent_command)} in {workspace.target_path}"
         )
+        self._session = session
 
         # Prepare environment
         env = os.environ.copy()
