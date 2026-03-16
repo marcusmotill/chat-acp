@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, Callable, Dict, Any, List
+from typing import Optional, Callable
 
 from core.models import Session, Workspace, ChatMessage
 from core.ports.agent_client import AgentClientProtocol

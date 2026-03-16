@@ -1,8 +1,7 @@
 from __future__ import annotations
-import asyncio
 import logging
 from typing import Dict, Optional, Callable, List, Any
-from core.models import Session, Workspace, ChatMessage
+from core.models import Workspace, ChatMessage
 from core.ports.agent_client import AgentClientProtocol
 from core.ports.chat_client import ChatClientProtocol
 from core.ports.config import ConfigProtocol
