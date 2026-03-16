@@ -231,11 +231,6 @@ class AcpStdioAgent(AgentClientProtocol):
                     if not raw_line:
                         continue
 
-                    logger.debug(
-                        f"<<< RECV: {raw_line[:500]}..."
-                        if len(raw_line) > 500
-                        else f"<<< RECV: {raw_line}"
-                    )
                     try:
                         data = json.loads(raw_line)
                     except json.JSONDecodeError:
@@ -269,6 +264,7 @@ class AcpStdioAgent(AgentClientProtocol):
                         if (
                             method == JsonRpcMethods.PROMPT_TURN
                             and self._prompt_turn_callback
+                            and self._session
                         ):
                             try:
                                 result = await self._prompt_turn_callback(
