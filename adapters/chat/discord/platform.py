@@ -35,14 +35,17 @@ class DiscordPlatform(ChatPlatform):
         else:
             agent_command = config.get_agent_command() or ["npx", "@anthropic-ai/claude-code", "--acp"]
 
+        agent_env = config.get_agent_env() or {}
+
         def create_agent(workspace: Workspace) -> AcpStdioAgent:
-            return AcpStdioAgent(agent_command=agent_command)
+            return AcpStdioAgent(agent_command=agent_command, agent_env=agent_env)
 
         bot = DiscordCommandBot(token=discord_token, orchestrator_callback=None)
         
         orchestrator = SessionManager(
             chat_adapter=bot,
             agent_factory=create_agent,
+            config_registry=config,
             on_workspace_registered=lambda cid, path: discord_config.add_workspace(cid, path)
         )
 

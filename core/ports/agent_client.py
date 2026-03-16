@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Dict, Any
 from core.models import Session, Workspace
 
 class AgentClientProtocol(ABC):
@@ -25,10 +25,16 @@ class AgentClientProtocol(ABC):
 
     @abstractmethod
     async def cancel_prompt(self, session: Session) -> None:
-        """
-        Sends a session/cancel notification to the agent to interrupt the current prompt turn.
-        """
-        pass
+        """Forcefully stops the current agent thinking/output process."""
+        ...
+
+    async def get_config_options(self, session: Session) -> List[Dict[str, Any]]:
+        """Returns the available configuration options (e.g. models) for the session."""
+        ...
+
+    async def set_config_option(self, session: Session, config_id: str, value: Any) -> Any:
+        """Sets a configuration option for the session."""
+        ...
         
     @abstractmethod
     async def stop_session(self, session: Session) -> None:

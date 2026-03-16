@@ -246,11 +246,88 @@ class WorkspaceCog(commands.Cog):
         count = await self.bot.orchestrator.clear_queue(str(ctx.channel_id))
         await ctx.respond(f"🗑️ **Queue cleared**: {count} messages removed.")
 
-    @commands.slash_command(name="model", description="Set the model mode (if supported by agent).")
-    async def model(self, ctx: discord.ApplicationContext, name: str):
-        # This would ideally map to session/set-mode or similar in ACP
-        # For now, we'll send it as a hidden instruction or just notify.
-        await ctx.respond(f"⚠️ **Model switching** via slash command is not yet fully implemented in generic ACP, but I've noted `{name}`.")
+    @commands.slash_command(name="model", description="Set the model for this workspace.")
+    async def model(self, ctx: discord.ApplicationContext):
+        if not self.bot.orchestrator:
+            await ctx.respond("Error: Orchestrator not yet wired.", ephemeral=True)
+            return
+
+        # Defer immediately since agent startup can take > 3s
+        await ctx.defer(ephemeral=True)
+
+        chat_session_id = str(ctx.channel_id)
+        chat_workspace_id = str(ctx.channel_id if not isinstance(ctx.channel, discord.Thread) else ctx.channel.parent_id)
+
+        # 1. Ensure a session is active to fetch models (ACP requires a session)
+        workspace = self.bot.orchestrator.get_workspace(chat_workspace_id)
+        if not workspace:
+            await ctx.respond("❌ This channel is not mapped to a workspace. Use `/add-workspace` first.", ephemeral=True)
+            return
+
+        # Ensure session exists (trigger session/new)
+        await self.bot.orchestrator_callback(
+            None, # No message
+            chat_workspace_id,
+            chat_session_id,
+            ctx.channel.name if hasattr(ctx.channel, 'name') else "Agent Session"
+        )
+
+        # Wait a moment for session to initialize and fetch models
+        # (This is a bit hacky, but ACP is async)
+        for _ in range(8): # Increase wait slightly
+            models = await self.bot.orchestrator.get_available_models(chat_workspace_id, chat_session_id)
+            if models:
+                break
+            await asyncio.sleep(1)
+        
+        if not models:
+            await ctx.followup.send("⏳ Agent is still initializing or doesn't support model options. Try sending a message first.", ephemeral=True)
+            return
+
+        # Create the selection view
+        view = ModelSelectionView(self.bot.orchestrator, chat_workspace_id, chat_session_id, models[0])
+        await ctx.followup.send("⚙️ **Model Selection Walkthrough**\nSelect a model:", view=view, ephemeral=True)
+
+class ModelSelectionView(discord.ui.View):
+    def __init__(self, orchestrator, workspace_id, session_id, config_option):
+        super().__init__(timeout=60)
+        self.orchestrator = orchestrator
+        self.workspace_id = workspace_id
+        self.session_id = session_id
+        
+        # ACP config option structure: { id, name, options: [ { value, name, description } ] }
+        options = []
+        for opt in config_option.get("options", []):
+            label = str(opt.get("name") or opt.get("value") or "Unknown")
+            value = str(opt.get("value") or label)
+            
+            options.append(discord.SelectOption(
+                label=label[:100],
+                value=value[:100],
+                description=str(opt.get("description") or "")[:100] if opt.get("description") else None
+            ))
+            
+        select = discord.ui.Select(
+            placeholder=f"Select {config_option.get('name', 'Model')}...",
+            options=options[:25] # Discord limit
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        model_id = interaction.data["values"][0]
+        success = await self.orchestrator.set_model(self.workspace_id, self.session_id, model_id)
+        
+        if success:
+            await interaction.response.edit_message(
+                content=f"✅ **Model successfully set to**: `{model_id}`\nThis preference will be persisted for this workspace.", 
+                view=None
+            )
+        else:
+            await interaction.response.edit_message(
+                content="❌ Failed to set model. Ensure the agent is still running.", 
+                view=None
+            )
 
     @commands.slash_command(name="clear", description="Clear the conversation context by restarting the agent session.")
     async def clear(self, ctx: discord.ApplicationContext):
