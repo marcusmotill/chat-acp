@@ -346,20 +346,24 @@ class AcpStdioAgent(AgentClientProtocol):
                     elif update_type == "tool_call_start":
                         tool_name = content_obj.get("name", "unknown tool")
                         yield StreamChunk(
-                            type="status", content=f"Using tool: {tool_name}"
+                            type="text", content=f"\n[Status: Using tool: {tool_name}]"
                         )
                     elif update_type == "agent_plan":
                         plan_text = content_obj.get("text", "")
                         if plan_text:
                             yield StreamChunk(
-                                type="thought", content=f"Plan: {plan_text}"
+                                type="text", content=f"\n[Thought: Plan: {plan_text}]"
                             )
                     elif update_type == "agent_status":
                         if text:
-                            yield StreamChunk(type="status", content=text)
+                            yield StreamChunk(
+                                type="text", content=f"\n[Status: {text}]"
+                            )
                     elif update_type == "agent_thought":
                         if text:
-                            yield StreamChunk(type="thought", content=text)
+                            yield StreamChunk(
+                                type="text", content=f"\n[Thought: {text}]"
+                            )
                     elif update_type == "config_option_update":
                         self._config_options = update_obj.get("configOptions", [])
                         yield StreamChunk(
