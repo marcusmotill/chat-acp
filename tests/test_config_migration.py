@@ -35,7 +35,7 @@ def test_config_migration_workspaces(tmp_path):
     cfg.load()
     
     assert "workspaces" not in cfg.data
-    assert cfg.data["discord"]["workspaces"]["channel_1"] == "/path/to/ws1"
+    assert cfg.data["discord"]["workspaces"]["channel_1"]["path"] == "/path/to/ws1"
 
 def test_nested_workspaces_migration(tmp_path):
     config_path = tmp_path / "nested_ws.json"
@@ -51,7 +51,7 @@ def test_nested_workspaces_migration(tmp_path):
     cfg = FileConfig(config_path=str(config_path))
     cfg.load()
     
-    assert cfg.data["discord"]["workspaces"]["c1"] == "/p1"
+    assert cfg.data["discord"]["workspaces"]["c1"]["path"] == "/p1"
 
 def test_config_save_load(temp_config):
     temp_config.data["discord"] = {"token": "test", "workspaces": {}}

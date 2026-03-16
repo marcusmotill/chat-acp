@@ -20,6 +20,14 @@ class PlatformConfig(Protocol):
         """Adds or updates a workspace mapping for this platform."""
         ...
 
+    def get_workspace_setting(self, channel_id: str, key: str) -> Optional[str]:
+        """Returns a setting for a specific workspace on this platform."""
+        ...
+
+    def set_workspace_setting(self, channel_id: str, key: str, value: str) -> None:
+        """Saves a setting for a specific workspace on this platform."""
+        ...
+
 class ConfigProtocol(Protocol):
     """
     Protocol for persistent configuration storage.
@@ -34,6 +42,14 @@ class ConfigProtocol(Protocol):
 
     def set_agent_command(self, command: List[str]) -> None:
         """Saves the agent command list."""
+        ...
+
+    def get_agent_env(self) -> Optional[Dict[str, str]]:
+        """Returns the stored agent environment variables."""
+        ...
+
+    def set_agent_env(self, env: Dict[str, str]) -> None:
+        """Saves the agent environment variables."""
         ...
 
     def load(self) -> None:

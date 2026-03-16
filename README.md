@@ -33,12 +33,18 @@ Example `config.json`:
 ```json
 {
     "agent_command": ["npx", "-y", "@anthropic-ai/claude-code", "--acp"],
+    "agent_env": {
+        "OPENAI_API_KEY": "sk-...",
+        "ANOTHER_VAR": "value"
+    },
     "discord": {
         "token": "your_token",
         "workspaces": {}
     }
 }
 ```
+
+The `agent_env` field allows passing custom environment variables to the ACP agent subprocess. This is typically used for providing API keys or other agent-specific configuration.
 
 ### 3. Usage
 Start the Discord bot in the background:

@@ -33,8 +33,52 @@ class FilePlatformConfig(PlatformConfig):
     def get_workspaces(self) -> Dict[str, str]:
         platform_data = self.owner.data.get(self.platform)
         if isinstance(platform_data, dict):
-            return platform_data.get("workspaces", {})
+            workspaces = platform_data.get("workspaces", {})
+            # Return channel_id -> path mapping
+            result = {}
+            for cid, data in workspaces.items():
+                if isinstance(data, dict):
+                    result[cid] = data.get("path", "")
+                else:
+                    result[cid] = data
+            return result
         return {}
+
+    def get_workspace_setting(self, channel_id: str, key: str) -> Optional[str]:
+        platform_data = self.owner.data.get(self.platform)
+        if isinstance(platform_data, dict):
+            workspaces = platform_data.get("workspaces", {})
+            ws_data = workspaces.get(channel_id)
+            if isinstance(ws_data, dict):
+                return ws_data.get("settings", {}).get(key)
+        return None
+
+    def set_workspace_setting(self, channel_id: str, key: str, value: str) -> None:
+        if self.platform not in self.owner.data:
+            self.owner.data[self.platform] = {}
+        if not isinstance(self.owner.data[self.platform], dict):
+            self.owner.data[self.platform] = {}
+            
+        if "workspaces" not in self.owner.data[self.platform]:
+            self.owner.data[self.platform]["workspaces"] = {}
+            
+        workspaces = self.owner.data[self.platform]["workspaces"]
+        if channel_id not in workspaces:
+            # We don't have a path yet, but we can still store a setting if needed
+            # though usually workspace is added first.
+            workspaces[channel_id] = {"path": "", "settings": {}}
+            
+        ws_data = workspaces[channel_id]
+        if not isinstance(ws_data, dict):
+            # Migrate flat path to dict
+            workspaces[channel_id] = {"path": ws_data, "settings": {}}
+            ws_data = workspaces[channel_id]
+            
+        if "settings" not in ws_data:
+            ws_data["settings"] = {}
+            
+        ws_data["settings"][key] = value
+        self.owner.save()
 
     def add_workspace(self, channel_id: str, target_path: str) -> None:
         if self.platform not in self.owner.data:
@@ -45,7 +89,12 @@ class FilePlatformConfig(PlatformConfig):
         if "workspaces" not in self.owner.data[self.platform]:
             self.owner.data[self.platform]["workspaces"] = {}
             
-        self.owner.data[self.platform]["workspaces"][channel_id] = target_path
+        workspaces = self.owner.data[self.platform]["workspaces"]
+        if channel_id in workspaces and isinstance(workspaces[channel_id], dict):
+            workspaces[channel_id]["path"] = target_path
+        else:
+            workspaces[channel_id] = {"path": target_path, "settings": {}}
+            
         self.owner.save()
 
 class FileConfig(ConfigProtocol):
@@ -64,7 +113,8 @@ class FileConfig(ConfigProtocol):
 
         # Start with generic structure; platforms like 'discord' are added dynamically
         self.data: Dict = {
-            "agent_command": []
+            "agent_command": [],
+            "agent_env": {}
         }
 
     def merge_defaults(self, defaults: Dict) -> None:
@@ -120,6 +170,15 @@ class FileConfig(ConfigProtocol):
                                 loaded_data["discord"] = {}
                             loaded_data["discord"]["workspaces"] = ws_root
 
+                # 4. Migrate flat workspace paths to nested dicts
+                for platform, p_data in loaded_data.items():
+                    if isinstance(p_data, dict) and "workspaces" in p_data:
+                        workspaces = p_data["workspaces"]
+                        if isinstance(workspaces, dict):
+                            for cid, target in workspaces.items():
+                                if not isinstance(target, dict):
+                                    workspaces[cid] = {"path": target, "settings": {}}
+
                 self.data.update(loaded_data)
                 logger.info(f"Loaded config from {self.config_path}")
         except Exception as e:
@@ -142,4 +201,11 @@ class FileConfig(ConfigProtocol):
 
     def set_agent_command(self, command: List[str]) -> None:
         self.data["agent_command"] = command
+        self.save()
+
+    def get_agent_env(self) -> Optional[Dict[str, str]]:
+        return self.data.get("agent_env")
+
+    def set_agent_env(self, env: Dict[str, str]) -> None:
+        self.data["agent_env"] = env
         self.save()

@@ -57,6 +57,7 @@ async def run():
     orchestrator = SessionManager(
         chat_adapter=bot,
         agent_factory=create_agent,
+        config_registry=config,
         on_workspace_registered=lambda cid, path: discord_config.add_workspace(cid, path)
     )
 
