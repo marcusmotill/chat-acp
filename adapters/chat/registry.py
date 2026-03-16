@@ -1,11 +1,13 @@
 from typing import Dict, Type, List
 from core.ports.platform import ChatPlatform
 
+
 class PlatformRegistry:
     """
     Registry for chat platform implementations.
     Allows decoupling generic CLI/Orchestrator from specific adapters.
     """
+
     _platforms: Dict[str, Type[ChatPlatform]] = {}
 
     @classmethod
@@ -26,6 +28,7 @@ class PlatformRegistry:
     def list_platforms(cls) -> List[str]:
         """List names of all registered platforms."""
         return list(cls._platforms.keys())
+
 
 # Global registry instance
 registry = PlatformRegistry()

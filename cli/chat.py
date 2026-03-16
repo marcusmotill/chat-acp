@@ -3,10 +3,12 @@ import asyncio
 from adapters.config.file_config import FileConfig
 from adapters.chat.registry import registry
 
+
 @click.group(name="chat")
 def chat_group():
     """Manage chat platforms."""
     pass
+
 
 @chat_group.command(name="start")
 @click.argument("platform_name")
@@ -16,11 +18,13 @@ def start_chat(ctx, platform_name: str, detach: bool):
     """Start the chat bot for a specific platform."""
     config: FileConfig = ctx.obj["config"]
     from cli.daemon import DaemonManager
+
     dm = DaemonManager()
 
     if detach:
         # Re-invoke the same command without -d
         import sys
+
         # We want to re-execute as a module to be safe: python -m cli.main ...
         # First, find the relative command: ['chat', 'start', 'discord']
         # We look for 'chat' in sys.argv to find the start of the command
@@ -28,7 +32,7 @@ def start_chat(ctx, platform_name: str, detach: bool):
             chat_index = sys.argv.index("chat")
             cmd_args = sys.argv[chat_index:]
             # Remove -d/--detach from cmd_args
-            cmd_args = [arg for arg in cmd_args if arg not in ('-d', '--detach')]
+            cmd_args = [arg for arg in cmd_args if arg not in ("-d", "--detach")]
         except ValueError:
             # Fallback if 'chat' is not found
             cmd_args = ["chat", "start", platform_name]
@@ -38,13 +42,14 @@ def start_chat(ctx, platform_name: str, detach: bool):
         config_args = []
         if config.config_path:
             config_args = ["--config", config.config_path]
-        
+
         full_args = ["-m", "cli.main"] + config_args + cmd_args
         dm.start(platform_name, full_args)
         return
 
     try:
         import setproctitle
+
         setproctitle.setproctitle(f"chat-acp: {platform_name}")
     except ImportError:
         pass
@@ -58,19 +63,24 @@ def start_chat(ctx, platform_name: str, detach: bool):
     except KeyboardInterrupt:
         click.echo("\nShutting down...")
 
+
 @chat_group.command(name="stop")
 @click.argument("platform_name")
 def stop_chat(platform_name: str):
     """Stop a background chat bot."""
     from cli.daemon import DaemonManager
+
     DaemonManager().stop(platform_name)
+
 
 @chat_group.command(name="status")
 @click.argument("platform_name")
 def status_chat(platform_name: str):
     """Check the status of a chat bot."""
     from cli.daemon import DaemonManager
+
     DaemonManager().status(platform_name)
+
 
 @chat_group.command(name="ls")
 def list_chats():
@@ -79,7 +89,7 @@ def list_chats():
     if not platforms:
         click.echo("No chat platforms registered.")
         return
-        
+
     click.echo("Available platforms:")
     for p in platforms:
         click.echo(f"- {p}")

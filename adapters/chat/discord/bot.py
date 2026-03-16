@@ -2,7 +2,7 @@ import logging
 import discord
 import asyncio
 from discord.ext import commands
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List
 from core.models import Session, Workspace, ChatMessage, StreamChunk
 from core.ports.chat_client import ChatClientProtocol
 
@@ -110,6 +110,41 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
 
         return Session(id=new_session_id, workspace_id=workspace.id)
 
+    async def get_history(self, session: Session, limit: int = 20) -> List[ChatMessage]:
+        """Fetches history from the Discord thread/channel, including bot responses."""
+        channel = self.get_channel(int(session.id)) or await self.fetch_channel(
+            int(session.id)
+        )
+        if not channel:
+            return []
+
+        history = []
+        async for msg in channel.history(limit=limit, oldest_first=True):
+            # We want to exclude the status/thought messages which are ephemeral
+            if msg.author.bot and (
+                msg.content.startswith("⏳ **Status**")
+                or msg.content.startswith("💭 **Thought**")
+            ):
+                continue
+
+            # We also want to exclude the command that triggered the current message if it's there
+            # But usually history() includes everything.
+
+            author_name = msg.author.display_name
+            if msg.author.id == self.user.id:
+                author_name = "Agent"  # Mark as agent for context
+
+            history.append(
+                ChatMessage(
+                    id=str(msg.id),
+                    session_id=session.id,
+                    content=msg.clean_content,
+                    author_id=str(msg.author.id),
+                    author_name=author_name,
+                )
+            )
+        return history
+
     async def send_message(self, session: Session, content: str) -> None:
         """Sends a simple message to the session thread."""
         channel_or_thread = self.get_channel(
@@ -127,11 +162,13 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
             await channel_or_thread.trigger_typing()
 
     async def stream_response(
-        self, session: Session, stream: AsyncGenerator[str, None]
+        self, session: Session, stream: AsyncGenerator[StreamChunk, None]
     ) -> None:
         """
         Consumes chunks from the agent and sends them as Discord messages.
-        Handles the 2000 character limit by chunking/buffering safely.
+        - Status updates in place.
+        - Thoughts update in place (max 200 chars).
+        - Final text replaces both.
         """
         channel_or_thread = self.get_channel(
             int(session.id)
@@ -142,8 +179,10 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
             )
             return
 
-        current_msg = ""
-        last_message_obj = None
+        status_msg = None
+        thought_msg = None
+        last_main_msg = None
+        current_main_content = ""
 
         # Keep typing indicator alive
         async def keep_typing():
@@ -158,35 +197,68 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
 
         try:
             async for chunk in stream:
-                if not chunk:
-                    continue
-                current_msg += chunk
+                if chunk.type == "text":
+                    current_main_content += chunk.content
 
-                # Simple Discord buffer limit: Every time we get near 2k chars, send a message.
-                if len(current_msg) > 1900:
-                    if last_message_obj:
-                        await last_message_obj.edit(content=current_msg[:1900])
+                    # Handle character limits
+                    if len(current_main_content) > 1900:
+                        if last_main_msg:
+                            await last_main_msg.edit(
+                                content=current_main_content[:1900]
+                            )
+                        else:
+                            last_main_msg = await channel_or_thread.send(
+                                current_main_content[:1900]
+                            )
+
+                        current_main_content = current_main_content[1900:]
+                        last_main_msg = None  # Start new message segment
+                        continue
+
+                    if not last_main_msg:
+                        if current_main_content.strip():
+                            last_main_msg = await channel_or_thread.send(
+                                current_main_content
+                            )
                     else:
-                        last_message_obj = await channel_or_thread.send(
-                            current_msg[:1900]
-                        )
+                        await last_main_msg.edit(content=current_main_content)
 
-                    current_msg = current_msg[1900:]
-                    last_message_obj = None  # Start new message
-                    continue
+                elif chunk.type == "status":
+                    content = f"⏳ **Status**: {chunk.content}"
+                    if not status_msg:
+                        status_msg = await channel_or_thread.send(content)
+                    else:
+                        await status_msg.edit(content=content)
 
-                if not last_message_obj:
-                    # Only send if non-empty to avoid triggering on meta-chunks
-                    if current_msg.strip():
-                        last_message_obj = await channel_or_thread.send(current_msg)
-                else:
-                    # Progressively edit
-                    await last_message_obj.edit(content=current_msg)
+                elif chunk.type == "thought":
+                    # Truncate to 200 chars as requested
+                    truncated = chunk.content[:200]
+                    content = f"💭 **Thought**: {truncated}"
+                    if len(chunk.content) > 200:
+                        content += "..."
 
-            if current_msg and not last_message_obj:
-                await channel_or_thread.send(current_msg)
+                    if not thought_msg:
+                        thought_msg = await channel_or_thread.send(content)
+                    else:
+                        await thought_msg.edit(content=content)
+
+            # Final check for main content
+            if current_main_content and not last_main_msg:
+                await channel_or_thread.send(current_main_content)
+
         finally:
             typing_task.cancel()
+            # "final message replaces both" -> Remove temporary scaffold messages
+            if status_msg:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            if thought_msg:
+                try:
+                    await thought_msg.delete()
+                except Exception:
+                    pass
 
     async def await_action_from_user(
         self, session: Session, prompt_turn_params: dict

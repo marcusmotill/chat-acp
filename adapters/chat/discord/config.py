@@ -1,10 +1,12 @@
 from typing import Optional, Dict
 from core.ports.config import PlatformConfig
 
+
 class DiscordConfig:
     """
     A typed wrapper for Discord-specific configuration stored in a PlatformConfig.
     """
+
     def __init__(self, platform_config: PlatformConfig):
         self._cfg = platform_config
 

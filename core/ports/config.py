@@ -1,9 +1,11 @@
 from typing import List, Dict, Optional, Protocol
 
+
 class PlatformConfig(Protocol):
     """
     Protocol for a platform-specific configuration view.
     """
+
     def get_setting(self, key: str) -> Optional[str]:
         """Returns a generic setting for this platform."""
         ...
@@ -28,10 +30,12 @@ class PlatformConfig(Protocol):
         """Saves a setting for a specific workspace on this platform."""
         ...
 
+
 class ConfigProtocol(Protocol):
     """
     Protocol for persistent configuration storage.
     """
+
     def for_platform(self, platform: str) -> PlatformConfig:
         """Returns a typed view for the specific platform."""
         ...

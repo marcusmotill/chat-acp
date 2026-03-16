@@ -7,11 +7,13 @@ from core.ports.config import PlatformConfig, ConfigProtocol
 
 logger = logging.getLogger(__name__)
 
+
 class FilePlatformConfig(PlatformConfig):
     """
     Implementation of PlatformConfig that proxies to a FileConfig instance.
     """
-    def __init__(self, owner: 'FileConfig', platform: str):
+
+    def __init__(self, owner: "FileConfig", platform: str):
         self.owner = owner
         self.platform = platform
 
@@ -26,7 +28,7 @@ class FilePlatformConfig(PlatformConfig):
             self.owner.data[self.platform] = {}
         if not isinstance(self.owner.data[self.platform], dict):
             self.owner.data[self.platform] = {}
-            
+
         self.owner.data[self.platform][key] = value
         self.owner.save()
 
@@ -58,25 +60,25 @@ class FilePlatformConfig(PlatformConfig):
             self.owner.data[self.platform] = {}
         if not isinstance(self.owner.data[self.platform], dict):
             self.owner.data[self.platform] = {}
-            
+
         if "workspaces" not in self.owner.data[self.platform]:
             self.owner.data[self.platform]["workspaces"] = {}
-            
+
         workspaces = self.owner.data[self.platform]["workspaces"]
         if channel_id not in workspaces:
             # We don't have a path yet, but we can still store a setting if needed
             # though usually workspace is added first.
             workspaces[channel_id] = {"path": "", "settings": {}}
-            
+
         ws_data = workspaces[channel_id]
         if not isinstance(ws_data, dict):
             # Migrate flat path to dict
             workspaces[channel_id] = {"path": ws_data, "settings": {}}
             ws_data = workspaces[channel_id]
-            
+
         if "settings" not in ws_data:
             ws_data["settings"] = {}
-            
+
         ws_data["settings"][key] = value
         self.owner.save()
 
@@ -85,23 +87,25 @@ class FilePlatformConfig(PlatformConfig):
             self.owner.data[self.platform] = {}
         if not isinstance(self.owner.data[self.platform], dict):
             self.owner.data[self.platform] = {}
-            
+
         if "workspaces" not in self.owner.data[self.platform]:
             self.owner.data[self.platform]["workspaces"] = {}
-            
+
         workspaces = self.owner.data[self.platform]["workspaces"]
         if channel_id in workspaces and isinstance(workspaces[channel_id], dict):
             workspaces[channel_id]["path"] = target_path
         else:
             workspaces[channel_id] = {"path": target_path, "settings": {}}
-            
+
         self.owner.save()
+
 
 class FileConfig(ConfigProtocol):
     """
     JSON file implementation of ConfigProtocol.
     Default path is ~/.chat-acp/config.json
     """
+
     def __init__(self, config_path: str = None):
         if config_path:
             self.config_path = str(Path(config_path).absolute())
@@ -112,20 +116,18 @@ class FileConfig(ConfigProtocol):
             self.config_path = str(Path(self.config_dir) / "config.json")
 
         # Start with generic structure; platforms like 'discord' are added dynamically
-        self.data: Dict = {
-            "agent_command": [],
-            "agent_env": {}
-        }
+        self.data: Dict = {"agent_command": [], "agent_env": {}}
 
     def merge_defaults(self, defaults: Dict) -> None:
         """Merges default values into the data if they don't already exist."""
+
         def deep_merge(target, source):
             for key, value in source.items():
                 if key not in target:
                     target[key] = value
                 elif isinstance(value, dict) and isinstance(target[key], dict):
                     deep_merge(target[key], value)
-        
+
         deep_merge(self.data, defaults)
         self.save()
 
@@ -137,20 +139,24 @@ class FileConfig(ConfigProtocol):
         try:
             with open(self.config_path, "r") as f:
                 loaded_data = json.load(f)
-                
-                # Migration: 
+
+                # Migration:
                 # 1. discord_bot_token (legacy root) -> discord.token (new namespaced)
                 if "discord_bot_token" in loaded_data:
                     logger.info("Migrating root 'discord_bot_token' to 'discord.token'")
                     if "discord" not in loaded_data:
                         loaded_data["discord"] = {}
-                    loaded_data["discord"]["token"] = loaded_data.pop("discord_bot_token")
+                    loaded_data["discord"]["token"] = loaded_data.pop(
+                        "discord_bot_token"
+                    )
 
                 # 2. bot_token (platform subkey) -> token (generic namespaced key)
                 # Universal migration for all platforms
                 for platform, p_data in loaded_data.items():
                     if isinstance(p_data, dict) and "bot_token" in p_data:
-                        logger.info(f"Migrating '{platform}.bot_token' to '{platform}.token'")
+                        logger.info(
+                            f"Migrating '{platform}.bot_token' to '{platform}.token'"
+                        )
                         p_data["token"] = p_data.pop("bot_token")
 
                 # 3. workspaces (root) -> discord.workspaces
@@ -159,13 +165,17 @@ class FileConfig(ConfigProtocol):
                     if isinstance(ws_root, dict):
                         # If it was already namespaced by platform (like the last implementation)
                         if "discord" in ws_root:
-                            logger.info("Migrating 'workspaces.discord' to 'discord.workspaces'")
+                            logger.info(
+                                "Migrating 'workspaces.discord' to 'discord.workspaces'"
+                            )
                             if "discord" not in loaded_data:
                                 loaded_data["discord"] = {}
                             loaded_data["discord"]["workspaces"] = ws_root["discord"]
                         else:
                             # It was a flat dict channel_id -> path
-                            logger.info("Migrating flat 'workspaces' to 'discord.workspaces'")
+                            logger.info(
+                                "Migrating flat 'workspaces' to 'discord.workspaces'"
+                            )
                             if "discord" not in loaded_data:
                                 loaded_data["discord"] = {}
                             loaded_data["discord"]["workspaces"] = ws_root

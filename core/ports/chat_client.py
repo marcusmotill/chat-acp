@@ -1,16 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, Dict, Any
-from core.models import Session, Workspace, StreamChunk
+from typing import AsyncGenerator, Dict, Any, List
+from core.models import Session, Workspace, StreamChunk, ChatMessage
 
-# ... lines 6-30 are unchanged
-    @abstractmethod
-    async def stream_response(
-        self, session: Session, stream: AsyncGenerator[StreamChunk, None]
-    ) -> None:
-        """
-        Consumes an async generator of StreamChunk objects from the agent and
-        streams them to the chat interface.
-        """
+
+class ChatClientProtocol(ABC):
+    """
     Interface for any chat client (e.g., Discord) connecting to the bridge.
     """
 
@@ -36,11 +30,18 @@ from core.models import Session, Workspace, StreamChunk
 
     @abstractmethod
     async def stream_response(
-        self, session: Session, stream: AsyncGenerator[str, None]
+        self, session: Session, stream: AsyncGenerator[StreamChunk, None]
     ) -> None:
         """
-        Consumes an async generator of response text chunks from the agent and
-        streams them to the chat interface (handling limits like Discord's 2000 chars).
+        Consumes an async generator of StreamChunk objects from the agent and
+        streams them to the chat interface.
+
+        Special handling for chunk types:
+        - 'status': Should update a single, persistent status message in place.
+        - 'thought': Should update a single, persistent thought message in place.
+        - 'text': Should be streamed normally.
+        - The final response (after the generator is exhausted) should replace
+          both the status and thought messages if they exist.
         """
         pass
 
@@ -65,5 +66,13 @@ from core.models import Session, Workspace, StreamChunk
         """
         Retrieves or creates a session.
         (e.g., Ensures a thread exists for the given message/invocation).
+        """
+        pass
+
+    @abstractmethod
+    async def get_history(self, session: Session, limit: int = 20) -> List[ChatMessage]:
+        """
+        Retrieves the recent message history for a session.
+        Useful for restoring context after a bridge restart.
         """
         pass

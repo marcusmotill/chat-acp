@@ -69,6 +69,7 @@ class SessionContext:
         Executes a single turn: Start agent -> Prompt -> Stream -> End
         """
         try:
+            is_new_session = self.agent is None
             await self._ensure_agent_started()
 
             if not message:
@@ -78,8 +79,13 @@ class SessionContext:
             if not self.agent:
                 raise AgentException("Failed to start agent.")
 
+            prompt_content = message.content
+            if is_new_session and hasattr(self, "_pending_context"):
+                prompt_content = self._pending_context + prompt_content
+                del self._pending_context
+
             await self.chat_adapter.trigger_typing(self.session)
-            response_stream = self.agent.prompt(self.session, message.content)
+            response_stream = self.agent.prompt(self.session, prompt_content)
             await self.chat_adapter.stream_response(self.session, response_stream)
 
         except AgentException as e:
@@ -100,6 +106,36 @@ class SessionContext:
         # Set the callback for agent-initiated requests (e.g., prompt_turn)
         self.agent.set_user_interaction_callback(self._handle_agent_prompt_turn)
         await self.agent.start_session(self.session, self.workspace)
+
+        # Persistence: If this is an existing thread, fetch history and inject context
+        try:
+            history = await self.chat_adapter.get_history(self.session, limit=10)
+            if history and len(history) > 1:
+                # Exclude the very last message if it's the one we're about to process
+                # But history() usually returns messages sent *before* now if called right
+                # Actually history() might include the trigger message.
+                # We'll just build a "Session Restore" block.
+
+                context_lines = []
+                for m in history:
+                    # Skip empty or meta messages
+                    if not m.content.strip():
+                        continue
+                    context_lines.append(f"{m.author_name}: {m.content}")
+
+                if context_lines:
+                    logger.info(
+                        f"Restoring context for session {self.session.id} from {len(context_lines)} historical messages."
+                    )
+                    self._pending_context = (
+                        "--- SESSION RESTORED ---\n"
+                        "The following is a summary of the previous conversation in this thread. "
+                        "Please use this context for future turns:\n\n"
+                        + "\n".join(context_lines)
+                        + "\n--- END OF RESTORED SESSION ---\n\n"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to fetch history for restoration: {e}")
 
         if self.initial_model:
             logger.info(

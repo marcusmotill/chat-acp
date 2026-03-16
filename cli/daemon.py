@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+
 class DaemonManager:
     def __init__(self, base_dir: Optional[Path] = None):
         if base_dir is None:
@@ -33,14 +34,14 @@ class DaemonManager:
                 pid_file.unlink()
 
         log_file = self._get_log_file(platform)
-        
+
         # Wrapped in a simple restart loop for resiliency
         # We spawn a 'watcher' process or just let the process self-restart?
         # A simple way is to spawn a shell script or a python script that loops.
         # But for now, let's keep it simple and just ensure it starts.
-        
+
         cmd = [sys.executable] + args
-        
+
         env = os.environ.copy()
         # Set an environment variable to indicate it's a daemon child to avoid infinite recursion
         env["CHAT_ACP_DAEMON"] = "1"
@@ -53,9 +54,9 @@ class DaemonManager:
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
-                env=env
+                env=env,
             )
-        
+
         pid_file.write_text(str(process.pid))
         print(f"Started '{platform}' in background (PID: {process.pid}).")
         print(f"Logs: {log_file}")

@@ -12,29 +12,35 @@ from adapters.config.file_config import FileConfig
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 async def run():
     load_dotenv()
     logger.info("Initializing configuration...")
     config = FileConfig()
     config.load()
-    
+
     # Priority: Env > Config
     # Supporting both DISCORD_BOT_TOKEN and legacy DISCORD_TOKEN
-    discord_env_token = os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get("DISCORD_TOKEN")
-    
+    discord_env_token = os.environ.get("DISCORD_BOT_TOKEN") or os.environ.get(
+        "DISCORD_TOKEN"
+    )
+
     from adapters.chat.discord.config import DiscordConfig
+
     discord_config = DiscordConfig(config.for_platform("discord"))
-    
+
     if discord_env_token:
         discord_config.token = discord_env_token
     else:
         discord_token = discord_config.token
-    
+
     # Final token used for bot initialization
     discord_token = discord_env_token or discord_config.token
 
     if not discord_token:
-        logger.error("Missing DISCORD_BOT_TOKEN (or DISCORD_TOKEN) in environment or config")
+        logger.error(
+            "Missing DISCORD_BOT_TOKEN (or DISCORD_TOKEN) in environment or config"
+        )
         return
 
     # Priority: Env > Config > Default
@@ -58,7 +64,9 @@ async def run():
         chat_adapter=bot,
         agent_factory=create_agent,
         config_registry=config,
-        on_workspace_registered=lambda cid, path: discord_config.add_workspace(cid, path)
+        on_workspace_registered=lambda cid, path: discord_config.add_workspace(
+            cid, path
+        ),
     )
 
     # Wire the callbacks
@@ -70,20 +78,22 @@ async def run():
     for cid, target_path in persisted_workspaces.items():
         workspace = Workspace(
             id=cid,
-            environment_id="default_env", 
+            environment_id="default_env",
             name=f"Workspace_{cid}",
-            target_path=target_path
+            target_path=target_path,
         )
         orchestrator.register_workspace(cid, workspace)
 
     logger.info("Starting Chat ACP Daemon...")
     await bot.start()
 
+
 def main():
     try:
         asyncio.run(run())
     except KeyboardInterrupt:
         logger.info("Shutting down daemon.")
+
 
 if __name__ == "__main__":
     main()

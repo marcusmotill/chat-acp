@@ -1,8 +1,8 @@
 import pytest
 import asyncio
-from typing import AsyncGenerator, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, Any, Optional, List
 
-from core.models import Workspace, Session, ChatMessage
+from core.models import Workspace, Session, ChatMessage, StreamChunk
 from core.orchestrator import SessionManager
 from core.ports.chat_client import ChatClientProtocol
 from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
@@ -30,10 +30,13 @@ class MockChatClient(ChatClientProtocol):
         pass
 
     async def stream_response(
-        self, session: Session, stream: AsyncGenerator[str, None]
+        self, session: Session, stream: AsyncGenerator[StreamChunk, None]
     ) -> None:
         async for chunk in stream:
             self.streamed_chunks.append((session.id, chunk))
+
+    async def get_history(self, session: Session, limit: int = 20) -> List[ChatMessage]:
+        return []
 
     async def await_action_from_user(
         self, session: Session, prompt_turn_params: Dict[str, Any]
@@ -64,9 +67,11 @@ class MockAgentClient(AgentClientProtocol):
     async def cancel_prompt(self, session: Session) -> None:
         self.prompts_received.append("CANCELLED")
 
-    async def prompt(self, session: Session, message: str) -> AsyncGenerator[str, None]:
+    async def prompt(
+        self, session: Session, message: str
+    ) -> AsyncGenerator[StreamChunk, None]:
         self.prompts_received.append(message)
-        yield "Chunk 1: "
+        yield StreamChunk(type="text", content="Chunk 1: ")
         await asyncio.sleep(0.01)
 
         # Simulate agent needing user input (prompt_turn)
@@ -80,12 +85,20 @@ class MockAgentClient(AgentClientProtocol):
             action_content = user_action_result.get("action", {}).get(
                 "content", "NO ACTION"
             )
-            yield f"Action received: {action_content}"
+            yield StreamChunk(type="text", content=f"Action received: {action_content}")
 
-        yield f"Processed {message}"
+        yield StreamChunk(type="text", content=f"Processed {message}")
 
     async def stop_session(self, session: Session) -> None:
         self.stopped = True
+
+    async def get_config_options(self, session: Session) -> List[Dict[str, Any]]:
+        return []
+
+    async def set_config_option(
+        self, session: Session, config_id: str, value: Any
+    ) -> bool:
+        return True
 
 
 @pytest.mark.asyncio
@@ -125,9 +138,15 @@ async def test_session_manager_routing():
 
     # Verify Chat Client streamed the response chunks
     assert len(chat_mock.streamed_chunks) == 3
-    assert chat_mock.streamed_chunks[0] == ("thread_1", "Chunk 1: ")
-    assert chat_mock.streamed_chunks[1][1].startswith("Action received:")
-    assert chat_mock.streamed_chunks[2] == ("thread_1", "Processed Hello agent")
+    assert chat_mock.streamed_chunks[0] == (
+        "thread_1",
+        StreamChunk(type="text", content="Chunk 1: "),
+    )
+    assert chat_mock.streamed_chunks[1][1].content.startswith("Action received:")
+    assert chat_mock.streamed_chunks[2] == (
+        "thread_1",
+        StreamChunk(type="text", content="Processed Hello agent"),
+    )
 
     # Verify Cleanup
     await manager.cleanup_session("thread_1")
@@ -271,7 +290,7 @@ async def test_prompt_turn_interaction():
     # It should have 3 chunks: "Chunk 1: ", "Action received: run_test_suite", and "Processed Test prompt turn"
     assert len(chat_mock.streamed_chunks) == 3
     assert (
-        chat_mock.streamed_chunks[1][1]
+        chat_mock.streamed_chunks[1][1].content
         == f"Action received: {expected_user_action['action']['content']}"
     )
 
