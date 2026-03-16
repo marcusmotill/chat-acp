@@ -1,17 +1,20 @@
 import pytest
 import asyncio
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, Any, Optional, List
 
-from core.models import Workspace, Session, ChatMessage
+from core.models import Workspace, Session, ChatMessage, StreamChunk
 from core.orchestrator import SessionManager
 from core.ports.chat_client import ChatClientProtocol
-from core.ports.agent_client import AgentClientProtocol
+from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
 
 
 class MockChatClient(ChatClientProtocol):
     def __init__(self):
         self.sent_messages = []
         self.streamed_chunks = []
+        self.action_to_return = {
+            "action": {"type": "text", "content": "This is the user's action"}
+        }
 
     @property
     def config_key(self) -> str:
@@ -27,10 +30,20 @@ class MockChatClient(ChatClientProtocol):
         pass
 
     async def stream_response(
-        self, session: Session, stream: AsyncGenerator[str, None]
+        self, session: Session, stream: AsyncGenerator[StreamChunk, None]
     ) -> None:
         async for chunk in stream:
             self.streamed_chunks.append((session.id, chunk))
+
+    async def get_history(self, session: Session, limit: int = 20) -> List[ChatMessage]:
+        return []
+
+    async def await_action_from_user(
+        self, session: Session, prompt_turn_params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self.sent_messages.append(("PROMPT_TURN", session.id, prompt_turn_params))
+        # Simulate user response
+        return self.action_to_return
 
     async def get_or_create_session(
         self, workspace: Workspace, context_id: str, title: str
@@ -43,6 +56,10 @@ class MockAgentClient(AgentClientProtocol):
         self.started = False
         self.stopped = False
         self.prompts_received = []
+        self.prompt_turn_callback: Optional[PromptTurnCallback] = None
+
+    def set_user_interaction_callback(self, callback: PromptTurnCallback) -> None:
+        self.prompt_turn_callback = callback
 
     async def start_session(self, session: Session, workspace: Workspace) -> None:
         self.started = True
@@ -50,14 +67,38 @@ class MockAgentClient(AgentClientProtocol):
     async def cancel_prompt(self, session: Session) -> None:
         self.prompts_received.append("CANCELLED")
 
-    async def prompt(self, session: Session, message: str) -> AsyncGenerator[str, None]:
+    async def prompt(
+        self, session: Session, message: str
+    ) -> AsyncGenerator[StreamChunk, None]:
         self.prompts_received.append(message)
-        yield "Chunk 1: "
+        yield StreamChunk(type="text", content="Chunk 1: ")
         await asyncio.sleep(0.01)
-        yield f"Processed {message}"
+
+        # Simulate agent needing user input (prompt_turn)
+        if self.prompt_turn_callback:
+            # The callback handles the blocking until the user responds
+            user_action_result = await self.prompt_turn_callback(
+                session, {"prompt": "What should I do next?"}
+            )
+
+            # The agent would typically process this result and continue, but we'll yield a confirmation
+            action_content = user_action_result.get("action", {}).get(
+                "content", "NO ACTION"
+            )
+            yield StreamChunk(type="text", content=f"Action received: {action_content}")
+
+        yield StreamChunk(type="text", content=f"Processed {message}")
 
     async def stop_session(self, session: Session) -> None:
         self.stopped = True
+
+    async def get_config_options(self, session: Session) -> List[Dict[str, Any]]:
+        return []
+
+    async def set_config_option(
+        self, session: Session, config_id: str, value: Any
+    ) -> bool:
+        return True
 
 
 @pytest.mark.asyncio
@@ -96,9 +137,16 @@ async def test_session_manager_routing():
     assert "Hello agent" in agent_mock.prompts_received
 
     # Verify Chat Client streamed the response chunks
-    assert len(chat_mock.streamed_chunks) == 2
-    assert chat_mock.streamed_chunks[0] == ("thread_1", "Chunk 1: ")
-    assert chat_mock.streamed_chunks[1] == ("thread_1", "Processed Hello agent")
+    assert len(chat_mock.streamed_chunks) == 3
+    assert chat_mock.streamed_chunks[0] == (
+        "thread_1",
+        StreamChunk(type="text", content="Chunk 1: "),
+    )
+    assert chat_mock.streamed_chunks[1][1].content.startswith("Action received:")
+    assert chat_mock.streamed_chunks[2] == (
+        "thread_1",
+        StreamChunk(type="text", content="Processed Hello agent"),
+    )
 
     # Verify Cleanup
     await manager.cleanup_session("thread_1")
@@ -155,8 +203,8 @@ async def test_session_manager_queuing():
     # Both messages should be processed sequentially
     assert "Msg 1" in agent_mock.prompts_received
     assert "Msg 2" in agent_mock.prompts_received
-    # Total chunks should be 4 (2 per msg)
-    assert len(chat_mock.streamed_chunks) == 4
+    # Total chunks should be 6 (3 per msg)
+    assert len(chat_mock.streamed_chunks) == 6
     # Check that a "busy" notification was sent
     assert any("busy" in msg for _, msg in chat_mock.sent_messages)
 
@@ -196,6 +244,57 @@ async def test_session_manager_abort():
     assert "CANCELLED" in agent_mock.prompts_received
     assert agent_mock.stopped is True
     assert "s1" not in manager.session_contexts
+
+
+@pytest.mark.asyncio
+async def test_prompt_turn_interaction():
+    chat_mock = MockChatClient()
+    agent_mock = MockAgentClient()
+
+    # The action that the chat client will return to the agent (simulating user input)
+    expected_user_action = {"action": {"type": "text", "content": "run_test_suite"}}
+    chat_mock.action_to_return = expected_user_action
+
+    manager = SessionManager(chat_mock, lambda ws: agent_mock)
+    workspace = Workspace(
+        id="ws_1", environment_id="env_1", name="Test", target_path="/tmp"
+    )
+    manager.register_workspace("ws_1", workspace)
+
+    msg = ChatMessage(
+        id="msg_1",
+        session_id="s1",
+        content="Test prompt turn",
+        author_id="u",
+        author_name="A",
+    )
+
+    await manager.handle_chat_message(
+        msg,
+        "ws_1",
+        "s1",
+        "S1",
+    )
+
+    # 1. Verify that the agent received the prompt
+    assert "Test prompt turn" in agent_mock.prompts_received
+
+    # 2. Verify that the chat client was asked to await an action from the user
+    # The message should contain the prompt_turn request content
+    assert len(chat_mock.sent_messages) == 1
+    prompt_turn_req = chat_mock.sent_messages[0]
+    assert prompt_turn_req[0] == "PROMPT_TURN"
+    assert prompt_turn_req[2]["prompt"] == "What should I do next?"
+
+    # 3. Verify that the final streamed output contains the simulated action result
+    # It should have 3 chunks: "Chunk 1: ", "Action received: run_test_suite", and "Processed Test prompt turn"
+    assert len(chat_mock.streamed_chunks) == 3
+    assert (
+        chat_mock.streamed_chunks[1][1].content
+        == f"Action received: {expected_user_action['action']['content']}"
+    )
+
+    await manager.cleanup_session("s1")
 
 
 @pytest.mark.asyncio

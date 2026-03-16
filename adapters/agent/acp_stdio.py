@@ -2,10 +2,10 @@ import os
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator, Dict, Any, Optional, List
+from typing import AsyncGenerator, Dict, Any, Optional, List, Union
 
-from core.models import Session, Workspace
-from core.ports.agent_client import AgentClientProtocol
+from core.models import Session, Workspace, StreamChunk
+from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
 from core.exceptions import AgentInitializationError, AgentExecutionError
 from adapters.agent.jsonrpc import JsonRpcNotification, JsonRpcResponse
 
@@ -22,6 +22,7 @@ class JsonRpcMethods:
     SESSION_SET_MODE = "session/set_mode"
     SESSION_SET_MODEL = "session/set_model"
     SESSION_SET_DASH_MODEL = "session/set-model"
+    PROMPT_TURN = "prompt_turn"
 
 
 class AcpStdioAgent(AgentClientProtocol):
@@ -48,76 +49,12 @@ class AcpStdioAgent(AgentClientProtocol):
         self._agent_session_id: Optional[str] = None
         self._config_options: List[Dict[str, Any]] = []
         self._successful_model_method: Optional[str] = None
+        self._prompt_turn_callback: Optional[PromptTurnCallback] = None
+        self._session: Optional[Session] = None
 
-    async def _listen_stdout(self):
-        """Reads stdout line by line, parsing Json RPC."""
-        if not self.process or not self.process.stdout:
-            return
-
-        while True:
-            line = await self.process.stdout.readline()
-            if not line:
-                break
-
-            try:
-                data = json.loads(line.decode().strip())
-                # Handle Response
-                if "id" in data and ("result" in data or "error" in data):
-                    resp = JsonRpcResponse(**data)
-                    fut = self._pending_requests.pop(resp.id, None)
-                    if fut and not fut.done():
-                        fut.set_result(resp)
-                # Handle Notification
-                elif "method" in data and "id" not in data:
-                    notif = JsonRpcNotification(**data)
-                    if notif.method == JsonRpcMethods.SESSION_UPDATE:
-                        # The update itself is nested in params['update']
-                        await self._update_queue.put(notif)
-                else:
-                    logger.debug(f"Agent Notification/Request: {data}")
-            except json.JSONDecodeError:
-                # If it's not JSON, route to normal logger
-                text = line.decode().strip()
-                if text:
-                    logger.debug(f"AGENT STDOUT: {text}")
-            except Exception as e:
-                logger.error(f"Error parsing agent output: {e}\nLine: {line.decode()}")
-
-        logger.info("Agent stdout closed.")
-        self._cleanup_pending_requests("Agent process terminated.")
-
-    async def _listen_stderr(self):
-        """Reads stderr line by line and logs it."""
-        if not self.process or not self.process.stderr:
-            return
-
-        while True:
-            line = await self.process.stderr.readline()
-            if not line:
-                break
-            text = line.decode().strip()
-            if text:
-                logger.info(f"AGENT STDERR: {text}")
-
-    def _cleanup_pending_requests(self, reason: str):
-        """Resolves all pending requests with an error."""
-        for req_id, fut in list(self._pending_requests.items()):
-            if not fut.done():
-                resp = JsonRpcResponse(
-                    id=req_id, error={"code": -32000, "message": reason}
-                )
-                fut.set_result(resp)
-        self._pending_requests.clear()
-
-    async def send_notification(
-        self, method: str, params: Optional[Dict[str, Any]] = None
-    ) -> None:
-        payload = {"jsonrpc": "2.0", "method": method, "params": params}
-        raw_req = json.dumps(payload) + "\n"
-        logger.debug(f">>> SEND NOTIFICATION: {raw_req.strip()}")
-        if self.process and self.process.stdin:
-            self.process.stdin.write(raw_req.encode())
-            await self.process.stdin.drain()
+    def set_user_interaction_callback(self, callback: PromptTurnCallback) -> None:
+        """Sets the function to call when the agent needs user action (e.g., prompt_turn)."""
+        self._prompt_turn_callback = callback
 
     async def send_request(
         self, method: str, params: Optional[Dict[str, Any]] = None
@@ -138,11 +75,41 @@ class AcpStdioAgent(AgentClientProtocol):
 
         return await fut
 
+    async def send_notification(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> None:
+        payload = {"jsonrpc": "2.0", "method": method, "params": params}
+
+        raw_req = json.dumps(payload) + "\n"
+        logger.debug(f">>> SEND NOTIFICATION: {raw_req.strip()}")
+        if self.process and self.process.stdin:
+            self.process.stdin.write(raw_req.encode())
+            await self.process.stdin.drain()
+
+    async def send_response(
+        self,
+        request_id: Union[str, int],
+        result: Optional[Any] = None,
+        error: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = {"jsonrpc": "2.0", "id": request_id}
+        if error is not None:
+            payload["error"] = error
+        else:
+            payload["result"] = result
+
+        raw_resp = json.dumps(payload) + "\n"
+        logger.debug(f">>> SEND RESPONSE: {raw_resp.strip()}")
+        if self.process and self.process.stdin:
+            self.process.stdin.write(raw_resp.encode())
+            await self.process.stdin.drain()
+
     async def start_session(self, session: Session, workspace: Workspace) -> None:
         """Starts the CLI subprocess and initializes ACP."""
         logger.info(
             f"Starting agent with command: {' '.join(self.agent_command)} in {workspace.target_path}"
         )
+        self._session = session
 
         # Prepare environment
         env = os.environ.copy()
@@ -178,7 +145,6 @@ class AcpStdioAgent(AgentClientProtocol):
             )
 
         logger.debug("Sending session/new request")
-        # According to docs: sessionId is generated by the agent.
         sess_resp = await self.send_request(
             JsonRpcMethods.SESSION_NEW, {"cwd": workspace.target_path, "mcpServers": []}
         )
@@ -195,52 +161,31 @@ class AcpStdioAgent(AgentClientProtocol):
             raise AgentInitializationError("Agent failed to return a sessionId")
 
         self._agent_session_id = sess_resp.result["sessionId"]
-        logger.debug(
-            f"FULL session/new response: {json.dumps(sess_resp.result, indent=2)}"
-        )
+        logger.debug(f"Agent session ID: {self._agent_session_id}")
 
-        # Store config options if provided
         self._config_options = sess_resp.result.get("configOptions", [])
-        self._is_legacy_mode_api = False
 
-        # Compatibility: Map various agent responses to configOptions
-        # We prioritize 'models' over 'modes'
+        # Compatibility logic
         model_list = None
-
-        # 1. Check for 'models' field (OpenCode style)
         models_root = sess_resp.result.get("models")
         if isinstance(models_root, dict):
             model_list = models_root.get("availableModels") or models_root.get("models")
-
-        # 2. Check for 'availableModels' at root
         if not model_list:
             model_list = sess_resp.result.get("availableModels")
-
-        # 3. Check for 'modes' field (Legacy ACP)
         if not model_list:
             modes_root = sess_resp.result.get("modes")
             if isinstance(modes_root, dict):
-                model_list = modes_root.get("availableModes") or modes_root.get("modes")
+                model_list = modes_root.get("availableModes") or modes_root.get(
+                    "models"
+                )
             else:
                 model_list = modes_root
-
-        # 4. Check for 'availableModes' at root
         if not model_list:
             model_list = sess_resp.result.get("availableModes")
 
-        # Legacy Mode API Compatibility:
-        # If the agent returned models/modes but not the standard 'configOptions',
-        # we map the legacy fields into a 'model' config option for compatibility.
         if not self._config_options and model_list:
-            logger.info(
-                f"Agent provided legacy models/modes. Mapping for compatibility: {model_list}"
-            )
-            self._is_legacy_mode_api = True  # Treat as legacy if we had to map it
-
-            # Ensure model_list is a list
             if not isinstance(model_list, list):
                 model_list = [model_list]
-
             self._config_options = [
                 {
                     "id": "model",
@@ -264,22 +209,111 @@ class AcpStdioAgent(AgentClientProtocol):
                 }
             ]
 
-        logger.info(
-            f"Agent session {self._agent_session_id} (Internal: {session.id}) started successfully with {len(self._config_options)} config options."
-        )
+        logger.info(f"Agent session {self._agent_session_id} started successfully.")
 
-    async def prompt(self, session: Session, message: str) -> AsyncGenerator[str, None]:
-        """
-        Sends the session/prompt and yields formatted strings
-        by consuming session/update notifications from the queue until the prompt returns.
-        """
+    async def _listen_stdout(self):
+        """Reads lines from the agent's stdout and routes them."""
+        if not self.process or not self.process.stdout:
+            return
+
+        buffer = b""
+        try:
+            while True:
+                # Read in large chunks to handle massive JSON lines (LimitOverrunError fix)
+                chunk = await self.process.stdout.read(65536)
+                if not chunk:
+                    break
+
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    raw_line = line.decode().strip()
+                    if not raw_line:
+                        continue
+
+                    try:
+                        data = json.loads(raw_line)
+                    except json.JSONDecodeError:
+                        logger.error(
+                            f"Failed to decode JSON from agent: {raw_line[:100]}"
+                        )
+                        continue
+
+                    # Handle Response
+                    if "id" in data and ("result" in data or "error" in data):
+                        resp = JsonRpcResponse(**data)
+                        fut = self._pending_requests.pop(resp.id, None)
+                        if fut:
+                            fut.set_result(resp)
+                        else:
+                            logger.warning(
+                                f"Received response for unknown request ID: {resp.id}"
+                            )
+
+                    # Handle Notification
+                    elif "method" in data and "id" not in data:
+                        notif = JsonRpcNotification(**data)
+                        await self._update_queue.put(notif)
+
+                    # Handle Request (Agent calling us)
+                    elif "method" in data and "id" in data:
+                        method = data["method"]
+                        req_id = data["id"]
+                        params = data.get("params", {})
+
+                        if (
+                            method == JsonRpcMethods.PROMPT_TURN
+                            and self._prompt_turn_callback
+                            and self._session
+                        ):
+                            try:
+                                result = await self._prompt_turn_callback(
+                                    self._session, params
+                                )
+                                await self.send_response(req_id, result=result)
+                            except Exception as e:
+                                logger.exception("Error handling prompt_turn request")
+                                await self.send_response(
+                                    req_id, error={"code": -32603, "message": str(e)}
+                                )
+                        else:
+                            logger.warning(
+                                f"Received unknown request method from agent: {method}"
+                            )
+                            await self.send_response(
+                                req_id,
+                                error={"code": -32601, "message": "Method not found"},
+                            )
+
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Error in stdout listener")
+
+    async def _listen_stderr(self):
+        """Reads from agent stderr and logs it."""
+        if not self.process or not self.process.stderr:
+            return
+        try:
+            while True:
+                line = await self.process.stderr.readline()
+                if not line:
+                    break
+                logger.warning(f"[AGENT STDERR] {line.decode().strip()}")
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Error in stderr listener")
+
+    async def prompt(
+        self, session: Session, message: str
+    ) -> AsyncGenerator[StreamChunk, None]:
         if not self.process or not self.process.stdin:
             raise RuntimeError("Agent process not started.")
 
         if not self._agent_session_id:
             raise AgentExecutionError("Agent session not initialized.")
 
-        logger.info(f"User sending prompt: {message}")
         prompt_params = {
             "sessionId": self._agent_session_id,
             "prompt": [{"type": "text", "text": message}],
@@ -288,89 +322,98 @@ class AcpStdioAgent(AgentClientProtocol):
             self.send_request(JsonRpcMethods.SESSION_PROMPT, prompt_params)
         )
 
-        # We continually read from the update queue until the prompt_task completes
-        # Note: in real ACP, the prompt_task waits until the turn completes
         while not prompt_task.done():
             try:
-                # Wait for an update or prompt to finish
                 notif_task = asyncio.create_task(self._update_queue.get())
-                done, pending = await asyncio.wait(
+                done, _ = await asyncio.wait(
                     [prompt_task, notif_task], return_when=asyncio.FIRST_COMPLETED
                 )
 
                 if notif_task in done:
                     notif: JsonRpcNotification = notif_task.result()
-                    logger.debug(f"Received notification: {notif.method}")
-                    # According to docs: params['update'] = { sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: '...'} }
                     update_obj = notif.params.get("update", {})
                     update_type = update_obj.get("sessionUpdate")
+                    content_obj = update_obj.get("content", {})
+                    text = (
+                        content_obj.get("text", "")
+                        if isinstance(content_obj, dict)
+                        else ""
+                    )
 
                     if update_type == "agent_message_chunk":
-                        content_obj = update_obj.get("content", {})
-                        if isinstance(content_obj, dict):
-                            text = content_obj.get("text", "")
-                            yield str(text)
+                        if text:
+                            yield StreamChunk(type="text", content=text)
                     elif update_type == "tool_call_start":
-                        tool_name = update_obj.get("content", {}).get(
-                            "name", "unknown tool"
+                        tool_name = content_obj.get("name", "unknown tool")
+                        yield StreamChunk(
+                            type="text", content=f"\n[Status: Using tool: {tool_name}]"
                         )
-                        yield f"\n🛠️ **Using tool**: `{tool_name}`...\n"
                     elif update_type == "agent_plan":
-                        plan_text = update_obj.get("content", {}).get("text", "")
-                        yield f"\n📝 **Agent Plan**: {plan_text}\n"
+                        plan_text = content_obj.get("text", "")
+                        if plan_text:
+                            yield StreamChunk(
+                                type="text", content=f"\n[Thought: Plan: {plan_text}]"
+                            )
+                    elif update_type == "agent_status":
+                        if text:
+                            yield StreamChunk(
+                                type="text", content=f"\n[Status: {text}]"
+                            )
+                    elif update_type == "agent_thought":
+                        if text:
+                            yield StreamChunk(
+                                type="text", content=f"\n[Thought: {text}]"
+                            )
                     elif update_type == "config_option_update":
                         self._config_options = update_obj.get("configOptions", [])
-                        yield "\n⚙️ **Agent Configuration Updated**\n"
-                    elif "content" in notif.params:
-                        # Fallback for simpler implementations
-                        yield str(notif.params["content"])
+                        yield StreamChunk(
+                            type="status", content="Configuration Updated"
+                        )
                 else:
                     notif_task.cancel()
-
             except Exception as e:
                 logger.error(f"Error during prompt loop: {e}")
                 break
 
-        # FINAL DRAIN: Ensure we process any chunks that arrived
-        # just before or with the prompt response.
         while not self._update_queue.empty():
             try:
                 notif = self._update_queue.get_nowait()
                 update_obj = notif.params.get("update", {})
                 if update_obj.get("sessionUpdate") == "agent_message_chunk":
                     content_obj = update_obj.get("content", {})
-                    if isinstance(content_obj, dict):
-                        text = content_obj.get("text", "")
-                        yield str(text)
+                    text = (
+                        content_obj.get("text", "")
+                        if isinstance(content_obj, dict)
+                        else ""
+                    )
+                    if text:
+                        yield StreamChunk(type="text", content=text)
             except asyncio.QueueEmpty:
                 break
 
-        # Final result of prompt
         final_resp = prompt_task.result()
-        logger.info(
-            f"Prompt task finished. Result: {json.dumps(final_resp.result, indent=2) if final_resp.result else 'No Result'}, Error: {final_resp.error}"
-        )
         if final_resp.error:
-            yield f"\n❌ **Agent Error**: {final_resp.error.get('message', 'Unknown error')}"
+            yield StreamChunk(
+                type="text", content=f"\n❌ Error: {final_resp.error.get('message')}"
+            )
         elif final_resp.result:
-            yield f"\n✅ **Turn Complete**: {final_resp.result.get('stopReason', 'success')}"
+            yield StreamChunk(
+                type="text",
+                content=f"\n✅ Done: {final_resp.result.get('stopReason', 'success')}",
+            )
 
     async def cancel_prompt(self, session: Session) -> None:
-        """Sends session/cancel notification."""
         if not self._agent_session_id:
             return
-        logger.info(f"Cancelling prompt for agent session {self._agent_session_id}")
         await self.send_notification(
             JsonRpcMethods.SESSION_CANCEL, {"sessionId": self._agent_session_id}
         )
 
     async def stop_session(self, session: Session) -> None:
-        """Kills the process."""
         if self._listen_task:
             self._listen_task.cancel()
         if self._stderr_task:
             self._stderr_task.cancel()
-
         if self.process:
             try:
                 self.process.terminate()
@@ -378,7 +421,6 @@ class AcpStdioAgent(AgentClientProtocol):
             except ProcessLookupError:
                 pass
             self.process = None
-        logger.info(f"Terminated agent process for {session.id}")
 
     async def get_config_options(self, session: Session) -> List[Dict[str, Any]]:
         return self._config_options
@@ -386,32 +428,18 @@ class AcpStdioAgent(AgentClientProtocol):
     async def set_config_option(
         self, session: Session, config_id: str, value: Any
     ) -> bool:
-        """Sends session/set_config_option request with fallbacks for legacy agents."""
         if not self._agent_session_id:
-            logger.error("Cannot set config option: Agent session not initialized.")
             return False
-
-        # Methods to try if it's a model setting
-        methods_to_try = []
+        methods_to_try = [JsonRpcMethods.SESSION_SET_CONFIG]
         if config_id == "model":
-            # If we already found a method that works for this session, try it first
             if self._successful_model_method:
-                methods_to_try.append(self._successful_model_method)
-
-            # Fallback list (excluding the successful one if already added)
-            potential_methods = [
-                JsonRpcMethods.SESSION_SET_CONFIG,
+                methods_to_try = [self._successful_model_method] + methods_to_try
+            methods_to_try += [
                 JsonRpcMethods.SESSION_SET_MODE,
                 JsonRpcMethods.SESSION_SET_MODEL,
                 JsonRpcMethods.SESSION_SET_DASH_MODEL,
             ]
-            for m in potential_methods:
-                if m not in methods_to_try:
-                    methods_to_try.append(m)
-        else:
-            methods_to_try = [JsonRpcMethods.SESSION_SET_CONFIG]
 
-        last_error = None
         for method in methods_to_try:
             params = {"sessionId": self._agent_session_id}
             if method == JsonRpcMethods.SESSION_SET_CONFIG:
@@ -424,27 +452,11 @@ class AcpStdioAgent(AgentClientProtocol):
             ):
                 params.update({"modelId": value})
 
-            logger.debug(f"Attempting to set model using {method}...")
             resp = await self.send_request(method, params)
-
             if not resp.error:
-                logger.info(f"Successfully set {config_id} to {value} using {method}")
                 if config_id == "model":
                     self._successful_model_method = method
-                # Update cached options if returned
                 if resp.result and "configOptions" in resp.result:
                     self._config_options = resp.result["configOptions"]
                 return True
-
-            last_error = resp.error
-            # If not a "Method not found" error, maybe stop here?
-            # Actually, let's try the next fallback anyway if it's not a session error.
-            if resp.error.get("code") != -32601:
-                logger.debug(
-                    f"{method} failed with error other than MethodNotFound: {resp.error}"
-                )
-
-        logger.error(
-            f"Failed to set config option {config_id} after trying all methods. Last error: {last_error}"
-        )
         return False
