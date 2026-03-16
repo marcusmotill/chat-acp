@@ -184,6 +184,8 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
         last_main_msg = None
         current_main_content = ""
 
+        typing_task = None
+
         # Keep typing indicator alive
         async def keep_typing():
             try:
@@ -247,7 +249,16 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
                 await channel_or_thread.send(current_main_content)
 
         finally:
-            typing_task.cancel()
+            if typing_task:
+                typing_task.cancel()
+                try:
+                    # Wait for the task to finish, ignoring the CancelledError
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("Error while awaiting typing task cleanup")
+
             # "final message replaces both" -> Remove temporary scaffold messages
             if status_msg:
                 try:
