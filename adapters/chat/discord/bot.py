@@ -29,6 +29,7 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
         self.discord_token = token
         self.orchestrator_callback = orchestrator_callback
         self.orchestrator = None  # Wired from main.py
+        self._waiting_sessions = set() # Track sessions waiting for user interaction
         
         # Add cogs
         self.add_cog(WorkspaceCog(self))
@@ -60,6 +61,10 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
             pass
         else:
             # Not a thread, not a mention. Ignore.
+            return
+
+        if chat_session_id in self._waiting_sessions:
+            # This message is being handled by await_action_from_user
             return
 
         chat_msg = ChatMessage(
@@ -169,6 +174,45 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
                 await channel_or_thread.send(current_msg)
         finally:
             typing_task.cancel()
+
+    async def await_action_from_user(
+        self, session: Session, prompt_turn_params: dict
+    ) -> dict:
+        """
+        Pauses execution and waits for the user to provide an action.
+        """
+        prompt_text = prompt_turn_params.get("prompt", "Agent is waiting for your input...")
+        
+        # Notify the user they need to provide input
+        channel_or_thread = self.get_channel(int(session.id)) or await self.fetch_channel(int(session.id))
+        if channel_or_thread:
+            await channel_or_thread.send(f"❓ **Input Required**: {prompt_text}")
+
+        session_id = session.id
+        self._waiting_sessions.add(session_id)
+
+        try:
+            def check(m):
+                # Must be in the same channel/thread
+                if str(m.channel.id) != session_id:
+                    return False
+                # Must not be a bot
+                if m.author.bot:
+                    return False
+                return True
+
+            # Wait for the next message in this session
+            # timeout is optional, but good practice if needed. Defaulting to None for now.
+            msg = await self.wait_for('message', check=check)
+            
+            return {
+                "action": {
+                    "type": "text",
+                    "content": msg.clean_content
+                }
+            }
+        finally:
+            self._waiting_sessions.remove(session_id)
 
     async def start(self) -> None:
         """Starts the discord bot."""

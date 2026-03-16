@@ -2,7 +2,7 @@ import os
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator, Dict, Any, Optional, List
+from typing import AsyncGenerator, Dict, Any, Optional, List, Union
 
 from core.models import Session, Workspace
 from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
@@ -74,6 +74,35 @@ class AcpStdioAgent(AgentClientProtocol):
             await self.process.stdin.drain()
 
         return await fut
+
+    async def send_notification(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> None:
+        payload = {"jsonrpc": "2.0", "method": method, "params": params}
+
+        raw_req = json.dumps(payload) + "\n"
+        logger.debug(f">>> SEND NOTIFICATION: {raw_req.strip()}")
+        if self.process and self.process.stdin:
+            self.process.stdin.write(raw_req.encode())
+            await self.process.stdin.drain()
+
+    async def send_response(
+        self,
+        request_id: Union[str, int],
+        result: Optional[Any] = None,
+        error: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = {"jsonrpc": "2.0", "id": request_id}
+        if error is not None:
+            payload["error"] = error
+        else:
+            payload["result"] = result
+
+        raw_resp = json.dumps(payload) + "\n"
+        logger.debug(f">>> SEND RESPONSE: {raw_resp.strip()}")
+        if self.process and self.process.stdin:
+            self.process.stdin.write(raw_resp.encode())
+            await self.process.stdin.drain()
 
     async def start_session(self, session: Session, workspace: Workspace) -> None:
         """Starts the CLI subprocess and initializes ACP."""
@@ -205,6 +234,81 @@ class AcpStdioAgent(AgentClientProtocol):
         logger.info(
             f"Agent session {self._agent_session_id} (Internal: {session.id}) started successfully with {len(self._config_options)} config options."
         )
+
+    async def _listen_stdout(self):
+        """Reads lines from the agent's stdout and routes them."""
+        if not self.process or not self.process.stdout:
+            return
+
+        try:
+            while True:
+                line = await self.process.stdout.readline()
+                if not line:
+                    break
+
+                raw_line = line.decode().strip()
+                if not raw_line:
+                    continue
+
+                logger.debug(f"<<< RECV: {raw_line}")
+                try:
+                    data = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to decode JSON from agent: {raw_line}")
+                    continue
+
+                # Handle Response
+                if "id" in data and ("result" in data or "error" in data):
+                    resp = JsonRpcResponse(**data)
+                    fut = self._pending_requests.pop(resp.id, None)
+                    if fut:
+                        fut.set_result(resp)
+                    else:
+                        logger.warning(f"Received response for unknown request ID: {resp.id}")
+
+                # Handle Notification
+                elif "method" in data and "id" not in data:
+                    notif = JsonRpcNotification(**data)
+                    await self._update_queue.put(notif)
+
+                # Handle Request (Agent calling us)
+                elif "method" in data and "id" in data:
+                    method = data["method"]
+                    req_id = data["id"]
+                    params = data.get("params", {})
+
+                    if method == JsonRpcMethods.PROMPT_TURN and self._prompt_turn_callback:
+                        # This bridges the agent's prompt_turn to the user callback
+                        try:
+                            result = await self._prompt_turn_callback(self._session, params)
+                            await self.send_response(req_id, result=result)
+                        except Exception as e:
+                            logger.exception("Error handling prompt_turn request")
+                            await self.send_response(req_id, error={"code": -32603, "message": str(e)})
+                    else:
+                        logger.warning(f"Received unknown request method from agent: {method}")
+                        await self.send_response(req_id, error={"code": -32601, "message": "Method not found"})
+
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Error in stdout listener")
+
+    async def _listen_stderr(self):
+        """Reads from agent stderr and logs it."""
+        if not self.process or not self.process.stderr:
+            return
+
+        try:
+            while True:
+                line = await self.process.stderr.readline()
+                if not line:
+                    break
+                logger.warning(f"[AGENT STDERR] {line.decode().strip()}")
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Error in stderr listener")
 
     async def prompt(self, session: Session, message: str) -> AsyncGenerator[str, None]:
         """
