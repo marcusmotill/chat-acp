@@ -228,6 +228,9 @@ class AcpStdioAgent(AgentClientProtocol):
         if not model_list:
             model_list = sess_resp.result.get("availableModes")
 
+        # Legacy Mode API Compatibility:
+        # If the agent returned models/modes but not the standard 'configOptions',
+        # we map the legacy fields into a 'model' config option for compatibility.
         if not self._config_options and model_list:
             logger.info(
                 f"Agent provided legacy models/modes. Mapping for compatibility: {model_list}"
