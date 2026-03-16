@@ -1,10 +1,16 @@
 from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Dict, Any
-from core.models import Session, Workspace
+from core.models import Session, Workspace, StreamChunk
 
-
-class ChatClientProtocol(ABC):
-    """
+# ... lines 6-30 are unchanged
+    @abstractmethod
+    async def stream_response(
+        self, session: Session, stream: AsyncGenerator[StreamChunk, None]
+    ) -> None:
+        """
+        Consumes an async generator of StreamChunk objects from the agent and
+        streams them to the chat interface.
+        """
     Interface for any chat client (e.g., Discord) connecting to the bridge.
     """
 

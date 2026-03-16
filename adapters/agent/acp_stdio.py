@@ -4,7 +4,128 @@ import json
 import logging
 from typing import AsyncGenerator, Dict, Any, Optional, List, Union
 
-from core.models import Session, Workspace
+import os
+import asyncio
+import json
+import logging
+from typing import AsyncGenerator, Dict, Any, Optional, List, Union
+
+from core.models import Session, Workspace, StreamChunk, StreamChunk
+from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
+from core.exceptions import AgentInitializationError, AgentExecutionError
+from adapters.agent.jsonrpc import JsonRpcNotification, JsonRpcResponse
+
+logger = logging.getLogger(__name__)
+
+
+# ... (JsonRpcMethods class remains the same)
+
+# ... (AcpStdioAgent __init__ and send methods remain the same)
+
+# ... (_listen_stdout and _listen_stderr methods remain the same)
+
+    async def prompt(self, session: Session, message: str) -> AsyncGenerator[StreamChunk, None]:
+        """
+        Sends the session/prompt and yields structured StreamChunk objects
+        by consuming session/update notifications from the queue until the prompt returns.
+        """
+        if not self.process or not self.process.stdin:
+            raise RuntimeError("Agent process not started.")
+
+        if not self._agent_session_id:
+            raise AgentExecutionError("Agent session not initialized.")
+
+        logger.info(f"User sending prompt: {message}")
+        prompt_params = {
+            "sessionId": self._agent_session_id,
+            "prompt": [{"type": "text", "text": message}],
+        }
+        prompt_task = asyncio.create_task(
+            self.send_request(JsonRpcMethods.SESSION_PROMPT, prompt_params)
+        )
+
+        # We continually read from the update queue until the prompt_task completes
+        # Note: in real ACP, the prompt_task waits until the turn completes
+        while not prompt_task.done():
+            try:
+                # Wait for an update or prompt to finish
+                notif_task = asyncio.create_task(self._update_queue.get())
+                done, pending = await asyncio.wait(
+                    [prompt_task, notif_task], return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if notif_task in done:
+                    notif: JsonRpcNotification = notif_task.result()
+                    logger.debug(f"Received notification: {notif.method}")
+                    # According to docs: params['update'] = { sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: '...'} }
+                    update_obj = notif.params.get("update", {})
+                    update_type = update_obj.get("sessionUpdate")
+                    content_obj = update_obj.get("content", {})
+                    text = ""
+                    
+                    if isinstance(content_obj, dict):
+                        text = content_obj.get("text", "")
+                        
+                    if update_type == "agent_message_chunk":
+                        # Final answer text stream
+                        if text:
+                            yield StreamChunk(type="text", content=text)
+                    elif update_type == "tool_call_start":
+                        # Tool call is treated as a status update
+                        tool_name = content_obj.get("name", "unknown tool")
+                        yield StreamChunk(type="status", content=f"🛠️ Using tool: `{tool_name}`...")
+                    elif update_type == "agent_plan":
+                        # Plan is treated as a thought
+                        plan_text = content_obj.get("text", "")
+                        if plan_text:
+                            yield StreamChunk(type="thought", content=f"📝 Agent Plan: {plan_text}")
+                    elif update_type == "agent_status":
+                        # Explicit status update
+                        if text:
+                            yield StreamChunk(type="status", content=text)
+                    elif update_type == "agent_thought":
+                        # Explicit thought update
+                        if text:
+                            yield StreamChunk(type="thought", content=text)
+                    elif update_type == "config_option_update":
+                        self._config_options = update_obj.get("configOptions", [])
+                        yield StreamChunk(type="status", content="⚙️ Agent Configuration Updated")
+                    elif "content" in notif.params:
+                        # Fallback for simpler implementations
+                        yield StreamChunk(type="text", content=str(notif.params["content"]))
+                else:
+                    notif_task.cancel()
+
+            except Exception as e:
+                logger.error(f"Error during prompt loop: {e}")
+                break
+
+        # FINAL DRAIN: Ensure we process any chunks that arrived
+        # just before or with the prompt response.
+        while not self._update_queue.empty():
+            try:
+                notif = self._update_queue.get_nowait()
+                update_obj = notif.params.get("update", {})
+                if update_obj.get("sessionUpdate") == "agent_message_chunk":
+                    content_obj = update_obj.get("content", {})
+                    if isinstance(content_obj, dict):
+                        text = content_obj.get("text", "")
+                        if text:
+                            yield StreamChunk(type="text", content=text)
+            except asyncio.QueueEmpty:
+                break
+
+        # Final result of prompt
+        final_resp = prompt_task.result()
+        logger.info(
+            f"Prompt task finished. Result: {json.dumps(final_resp.result, indent=2) if final_resp.result else 'No Result'}, Error: {final_resp.error}"
+        )
+        if final_resp.error:
+            yield StreamChunk(type="text", content=f"\n❌ **Agent Error**: {final_resp.error.get('message', 'Unknown error')}")
+        elif final_resp.result:
+            yield StreamChunk(type="text", content=f"\n✅ **Turn Complete**: {final_resp.result.get('stopReason', 'success')}")
+
+# ... (The rest of the class remains the same)
 from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
 from core.exceptions import AgentInitializationError, AgentExecutionError
 from adapters.agent.jsonrpc import JsonRpcNotification, JsonRpcResponse
@@ -310,9 +431,9 @@ class AcpStdioAgent(AgentClientProtocol):
         except Exception:
             logger.exception("Error in stderr listener")
 
-    async def prompt(self, session: Session, message: str) -> AsyncGenerator[str, None]:
+    async def prompt(self, session: Session, message: str) -> AsyncGenerator[StreamChunk, None]:
         """
-        Sends the session/prompt and yields formatted strings
+        Sends the session/prompt and yields structured StreamChunk objects
         by consuming session/update notifications from the queue until the prompt returns.
         """
         if not self.process or not self.process.stdin:
@@ -346,26 +467,39 @@ class AcpStdioAgent(AgentClientProtocol):
                     # According to docs: params['update'] = { sessionUpdate: 'agent_message_chunk', content: {type: 'text', text: '...'} }
                     update_obj = notif.params.get("update", {})
                     update_type = update_obj.get("sessionUpdate")
-
+                    content_obj = update_obj.get("content", {})
+                    text = ""
+                    
+                    if isinstance(content_obj, dict):
+                        text = content_obj.get("text", "")
+                        
                     if update_type == "agent_message_chunk":
-                        content_obj = update_obj.get("content", {})
-                        if isinstance(content_obj, dict):
-                            text = content_obj.get("text", "")
-                            yield str(text)
+                        # Final answer text stream
+                        if text:
+                            yield StreamChunk(type="text", content=text)
                     elif update_type == "tool_call_start":
-                        tool_name = update_obj.get("content", {}).get(
-                            "name", "unknown tool"
-                        )
-                        yield f"\n🛠️ **Using tool**: `{tool_name}`...\n"
+                        # Tool call is treated as a status update
+                        tool_name = content_obj.get("name", "unknown tool")
+                        yield StreamChunk(type="status", content=f"🛠️ Using tool: `{tool_name}`...")
                     elif update_type == "agent_plan":
-                        plan_text = update_obj.get("content", {}).get("text", "")
-                        yield f"\n📝 **Agent Plan**: {plan_text}\n"
+                        # Plan is treated as a thought
+                        plan_text = content_obj.get("text", "")
+                        if plan_text:
+                            yield StreamChunk(type="thought", content=f"📝 Agent Plan: {plan_text}")
+                    elif update_type == "agent_status":
+                        # Explicit status update
+                        if text:
+                            yield StreamChunk(type="status", content=text)
+                    elif update_type == "agent_thought":
+                        # Explicit thought update
+                        if text:
+                            yield StreamChunk(type="thought", content=text)
                     elif update_type == "config_option_update":
                         self._config_options = update_obj.get("configOptions", [])
-                        yield "\n⚙️ **Agent Configuration Updated**\n"
+                        yield StreamChunk(type="status", content="⚙️ Agent Configuration Updated")
                     elif "content" in notif.params:
                         # Fallback for simpler implementations
-                        yield str(notif.params["content"])
+                        yield StreamChunk(type="text", content=str(notif.params["content"]))
                 else:
                     notif_task.cancel()
 
@@ -383,7 +517,8 @@ class AcpStdioAgent(AgentClientProtocol):
                     content_obj = update_obj.get("content", {})
                     if isinstance(content_obj, dict):
                         text = content_obj.get("text", "")
-                        yield str(text)
+                        if text:
+                            yield StreamChunk(type="text", content=text)
             except asyncio.QueueEmpty:
                 break
 
@@ -393,9 +528,9 @@ class AcpStdioAgent(AgentClientProtocol):
             f"Prompt task finished. Result: {json.dumps(final_resp.result, indent=2) if final_resp.result else 'No Result'}, Error: {final_resp.error}"
         )
         if final_resp.error:
-            yield f"\n❌ **Agent Error**: {final_resp.error.get('message', 'Unknown error')}"
+            yield StreamChunk(type="text", content=f"\n❌ **Agent Error**: {final_resp.error.get('message', 'Unknown error')}")
         elif final_resp.result:
-            yield f"\n✅ **Turn Complete**: {final_resp.result.get('stopReason', 'success')}"
+            yield StreamChunk(type="text", content=f"\n✅ **Turn Complete**: {final_resp.result.get('stopReason', 'success')}")
 
     async def cancel_prompt(self, session: Session) -> None:
         """Sends session/cancel notification."""
