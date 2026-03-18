@@ -76,3 +76,11 @@ class ChatClientProtocol(ABC):
         Useful for restoring context after a bridge restart.
         """
         pass
+
+    @abstractmethod
+    async def notify(self, session: Session, message: str) -> None:
+        """
+        Sends a notification message to the session.
+        This is typically used by background processes to "wake up" the agent.
+        """
+        pass

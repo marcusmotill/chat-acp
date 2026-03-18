@@ -40,7 +40,13 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
 
     async def on_message(self, message: discord.Message):
         if message.author.bot:
-            return
+            # Only process if it's a notification from our own CLI (self-notification)
+            if message.author.id == self.user.id and message.content.startswith(
+                "🔔 **Notification**"
+            ):
+                pass  # Continue to process as a prompt
+            else:
+                return
 
         # Context mapping
         # 1. Server mapping (Environment)
@@ -152,6 +158,10 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
         ) or await self.fetch_channel(int(session.id))
         if channel_or_thread:
             await channel_or_thread.send(content)
+
+    async def notify(self, session: Session, message: str) -> None:
+        """Sends a notification message to the session thread."""
+        await self.send_message(session, f"🔔 **Notification**: {message}")
 
     async def trigger_typing(self, session: Session) -> None:
         """Triggers the 'typing...' indicator in the chat interface."""

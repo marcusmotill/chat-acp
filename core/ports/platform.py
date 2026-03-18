@@ -23,3 +23,12 @@ class ChatPlatform(ABC):
     def get_config_schema(self) -> Dict[str, Any]:
         """Optional: returns a schema for required configuration."""
         return {}
+
+    @abstractmethod
+    async def notify(
+        self, config: ConfigProtocol, session_id: str, message: str
+    ) -> None:
+        """
+        Sends a notification message to the session without necessarily starting the full bot.
+        """
+        pass

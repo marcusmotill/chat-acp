@@ -47,9 +47,11 @@ class SessionContext:
             await self.queue.put(
                 (message, chat_workspace_id, chat_session_id, chat_session_name)
             )
-            await self.chat_adapter.send_message(
-                self.session, "⏳ Agent is busy. Message queued."
-            )
+            # Silence the "busy" warning for automated notifications to prevent race condition noise
+            if not message.content.startswith("🔔"):
+                await self.chat_adapter.send_message(
+                    self.session, "⏳ Agent is busy. Message queued."
+                )
             return
 
         self.busy = True

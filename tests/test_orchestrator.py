@@ -50,6 +50,9 @@ class MockChatClient(ChatClientProtocol):
     ) -> Session:
         return Session(id=context_id, workspace_id=workspace.id)
 
+    async def notify(self, session: Session, message: str) -> None:
+        self.sent_messages.append(("NOTIFICATION", session.id, message))
+
 
 class MockAgentClient(AgentClientProtocol):
     def __init__(self):
@@ -295,6 +298,65 @@ async def test_prompt_turn_interaction():
     )
 
     await manager.cleanup_session("s1")
+
+
+@pytest.mark.asyncio
+async def test_session_manager_queuing_notification_silence():
+    chat_mock = MockChatClient()
+    agent_mock = MockAgentClient()
+
+    manager = SessionManager(chat_mock, lambda ws: agent_mock)
+    workspace = Workspace(
+        id="ws_1", environment_id="env_1", name="Test", target_path="/tmp"
+    )
+    manager.register_workspace("ws_1", workspace)
+
+    # 1. Start a long-running turn
+    task1 = asyncio.create_task(
+        manager.handle_chat_message(
+            ChatMessage(
+                id="m1",
+                session_id="s1",
+                content="Msg 1",
+                author_id="u",
+                author_name="A",
+            ),
+            "ws_1",
+            "s1",
+            "S1",
+        )
+    )
+    await asyncio.sleep(0.001)
+
+    # 2. While Turn 1 is busy, send a NOTIFICATION
+    task2 = asyncio.create_task(
+        manager.handle_chat_message(
+            ChatMessage(
+                id="m2",
+                session_id="s1",
+                content="🔔 Notification: Wake up",
+                author_id="u",
+                author_name="A",
+            ),
+            "ws_1",
+            "s1",
+            "S1",
+        )
+    )
+
+    await asyncio.gather(task1, task2)
+
+    # Both messages should be processed
+    assert "Msg 1" in agent_mock.prompts_received
+    assert "🔔 Notification: Wake up" in agent_mock.prompts_received
+
+    # CRITICAL: Verify that NO "busy" notification was sent for the notification message
+    # Filter sent_messages safely regardless of tuple length
+    busy_messages = []
+    for m in chat_mock.sent_messages:
+        if len(m) >= 2 and isinstance(m[1], str) and "busy" in m[1]:
+            busy_messages.append(m)
+    assert len(busy_messages) == 0
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ description = "Chat ACP - Bridge between AI agents and chat platforms"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "aiohttp>=3.13.3",
     "click>=8.3.1",
     "py-cord>=2.7.1",
     "pydantic>=2.12.5",

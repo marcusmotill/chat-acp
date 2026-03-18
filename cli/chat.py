@@ -93,3 +93,18 @@ def list_chats():
     click.echo("Available platforms:")
     for p in platforms:
         click.echo(f"- {p}")
+
+
+@chat_group.command(name="notify")
+@click.argument("platform")
+@click.argument("session_id")
+@click.argument("message")
+@click.pass_context
+def notify(ctx, platform: str, session_id: str, message: str):
+    """Send a notification message to a session."""
+    config: FileConfig = ctx.obj["config"]
+    try:
+        p = registry.get_platform(platform)
+        asyncio.run(p.notify(config, session_id, message))
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)

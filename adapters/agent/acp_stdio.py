@@ -32,7 +32,10 @@ class AcpStdioAgent(AgentClientProtocol):
     """
 
     def __init__(
-        self, agent_command: list[str], agent_env: Optional[Dict[str, str]] = None
+        self,
+        agent_command: list[str],
+        agent_env: Optional[Dict[str, str]] = None,
+        platform: str = "default",
     ):
         """
         :param agent_command: The executable and args to run, e.g. ["npx", "claude-code", "--acp"]
@@ -40,6 +43,7 @@ class AcpStdioAgent(AgentClientProtocol):
         """
         self.agent_command = agent_command
         self.agent_env = agent_env or {}
+        self.platform = platform
         self.process: Optional[asyncio.subprocess.Process] = None
         self._request_id = 0
         self._pending_requests: Dict[int, asyncio.Future] = {}
@@ -115,6 +119,11 @@ class AcpStdioAgent(AgentClientProtocol):
         env = os.environ.copy()
         if self.agent_env:
             env.update(self.agent_env)
+
+        # Inject session metadata for "wake up" notifications
+        env["ACP_CHAT_SESSION_ID"] = str(session.id)
+        env["ACP_CHAT_WORKSPACE_ID"] = str(workspace.id)
+        env["ACP_CHAT_PLATFORM"] = self.platform
 
         self.process = await asyncio.create_subprocess_exec(
             *self.agent_command,

@@ -49,7 +49,9 @@ class DiscordPlatform(ChatPlatform):
         agent_env = config.get_agent_env() or {}
 
         def create_agent(workspace: Workspace) -> AcpStdioAgent:
-            return AcpStdioAgent(agent_command=agent_command, agent_env=agent_env)
+            return AcpStdioAgent(
+                agent_command=agent_command, agent_env=agent_env, platform="discord"
+            )
 
         bot = DiscordCommandBot(token=discord_token, orchestrator_callback=None)
 
@@ -78,3 +80,30 @@ class DiscordPlatform(ChatPlatform):
 
         click.echo("Starting Discord ACP Bridge...")
         await bot.start()
+
+    async def notify(
+        self, config: ConfigProtocol, session_id: str, message: str
+    ) -> None:
+        from adapters.chat.discord.config import DiscordConfig
+        import aiohttp
+
+        discord_config = DiscordConfig(config.for_platform("discord"))
+        token = discord_config.token
+
+        if not token:
+            click.echo("Error: Missing Discord token in config", err=True)
+            return
+
+        url = f"https://discord.com/api/v10/channels/{session_id}/messages"
+        headers = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
+        payload = {"content": f"🔔 **Notification**: {message}"}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status == 200:
+                    click.echo(f"✅ Notification sent to Discord session {session_id}")
+                else:
+                    txt = await resp.text()
+                    click.echo(
+                        f"❌ Failed to send notification: {resp.status} {txt}", err=True
+                    )
