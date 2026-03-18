@@ -62,6 +62,15 @@ Stop the bot:
 uv run chat-acp chat stop discord
 ```
 
+### 4. Background Tasks & Notifications
+The bridge injects session metadata (`ACP_CHAT_SESSION_ID`, `ACP_CHAT_PLATFORM`) into the agent's environment. Agents can use these to notify you when a long-running background task is complete:
+
+```bash
+# Example usage in an agent session
+(long_command; chat-acp chat notify $ACP_CHAT_PLATFORM $ACP_CHAT_SESSION_ID "Task complete!") &
+```
+The bridge recognizes the `🔔` notification and **refeeds it as a prompt**, waking the agent up to continue work.
+
 ---
 
 ## 🏛️ Core Architecture

@@ -15,6 +15,11 @@ class MockPlatform(ChatPlatform):
     def get_config_schema(self) -> dict:
         return {"test": "schema"}
 
+    async def notify(
+        self, config: ConfigProtocol, session_id: str, message: str
+    ) -> None:
+        pass
+
 
 def test_registry_registration():
     registry = PlatformRegistry()
