@@ -11,6 +11,9 @@ from adapters.agent.jsonrpc import JsonRpcNotification, JsonRpcResponse
 
 logger = logging.getLogger(__name__)
 
+# JSON-RPC error code for "Method not found"
+METHOD_NOT_FOUND_CODE = -32601
+
 
 class JsonRpcMethods:
     INITIALIZE = "initialize"
@@ -20,8 +23,6 @@ class JsonRpcMethods:
     SESSION_CANCEL = "session/cancel"
     SESSION_SET_CONFIG = "session/set_config_option"
     SESSION_SET_MODE = "session/set_mode"
-    SESSION_SET_MODEL = "session/set_model"
-    SESSION_SET_DASH_MODEL = "session/set-model"
     PROMPT_TURN = "prompt_turn"
 
 
@@ -50,11 +51,14 @@ class AcpStdioAgent(AgentClientProtocol):
         self._listen_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
         self._update_queue: asyncio.Queue = asyncio.Queue()
+        self._error_queue: asyncio.Queue = asyncio.Queue()
         self._agent_session_id: Optional[str] = None
         self._config_options: List[Dict[str, Any]] = []
-        self._successful_model_method: Optional[str] = None
+        self._successful_config_method: Optional[str] = None
         self._prompt_turn_callback: Optional[PromptTurnCallback] = None
         self._session: Optional[Session] = None
+        # State flag: set True when we're probing methods so stderr noise is expected
+        self._suppress_stderr: bool = False
 
     def set_user_interaction_callback(self, callback: PromptTurnCallback) -> None:
         """Sets the function to call when the agent needs user action (e.g., prompt_turn)."""
@@ -174,7 +178,7 @@ class AcpStdioAgent(AgentClientProtocol):
 
         self._config_options = sess_resp.result.get("configOptions", [])
 
-        # Compatibility logic
+        # Compatibility logic: build config options from legacy model/mode lists
         model_list = None
         models_root = sess_resp.result.get("models")
         if isinstance(models_root, dict):
@@ -300,17 +304,53 @@ class AcpStdioAgent(AgentClientProtocol):
             logger.exception("Error in stdout listener")
 
     async def _listen_stderr(self):
-        """Reads from agent stderr and logs it."""
+        """Reads from agent stderr with debounce grouping.
+
+        Groups rapid multi-line stderr output (like JSON-RPC error blobs or
+        tracebacks) into single error messages using a 200ms debounce window.
+        Lines arriving while _suppress_stderr is True are discarded at read
+        time (not at flush time) to avoid race conditions with the debounce.
+        """
         if not self.process or not self.process.stderr:
             return
+
+        stderr_buffer: list[str] = []
+        debounce_seconds = 0.2
+
+        async def flush_buffer():
+            """Flush accumulated stderr lines as a single error."""
+            if not stderr_buffer:
+                return
+            combined = "\n".join(stderr_buffer)
+            stderr_buffer.clear()
+
+            logger.warning(f"[AGENT STDERR] {combined}")
+            await self._error_queue.put(StreamChunk(type="error", content=combined))
+
         try:
             while True:
-                line = await self.process.stderr.readline()
-                if not line:
-                    break
-                logger.warning(f"[AGENT STDERR] {line.decode().strip()}")
+                try:
+                    line = await asyncio.wait_for(
+                        self.process.stderr.readline(), timeout=debounce_seconds
+                    )
+                    if not line:
+                        # EOF — flush remaining
+                        await flush_buffer()
+                        break
+                    decoded = line.decode().strip()
+                    if decoded:
+                        # Check suppression at READ time, not flush time.
+                        # This avoids the race where the flag turns off before
+                        # the debounce timer fires.
+                        if self._suppress_stderr:
+                            logger.debug(f"[AGENT STDERR] (suppressed) {decoded}")
+                        else:
+                            stderr_buffer.append(decoded)
+                except asyncio.TimeoutError:
+                    # Debounce window elapsed — flush what we have
+                    await flush_buffer()
         except asyncio.CancelledError:
-            pass
+            await flush_buffer()
         except Exception:
             logger.exception("Error in stderr listener")
 
@@ -333,6 +373,14 @@ class AcpStdioAgent(AgentClientProtocol):
 
         while not prompt_task.done():
             try:
+                # Drain any stderr errors that arrived
+                while not self._error_queue.empty():
+                    try:
+                        error_chunk = self._error_queue.get_nowait()
+                        yield error_chunk
+                    except asyncio.QueueEmpty:
+                        break
+
                 notif_task = asyncio.create_task(self._update_queue.get())
                 done, _ = await asyncio.wait(
                     [prompt_task, notif_task], return_when=asyncio.FIRST_COMPLETED
@@ -400,6 +448,14 @@ class AcpStdioAgent(AgentClientProtocol):
             except asyncio.QueueEmpty:
                 break
 
+        # Drain any remaining stderr errors
+        while not self._error_queue.empty():
+            try:
+                error_chunk = self._error_queue.get_nowait()
+                yield error_chunk
+            except asyncio.QueueEmpty:
+                break
+
         final_resp = prompt_task.result()
         if final_resp.error:
             yield StreamChunk(
@@ -434,38 +490,105 @@ class AcpStdioAgent(AgentClientProtocol):
     async def get_config_options(self, session: Session) -> List[Dict[str, Any]]:
         return self._config_options
 
+    def _get_config_category(self, config_id: str) -> Optional[str]:
+        """Looks up the category for a config option by its ID."""
+        for opt in self._config_options:
+            if opt.get("id") == config_id:
+                return opt.get("category")
+        return None
+
     async def set_config_option(
         self, session: Session, config_id: str, value: Any
     ) -> bool:
+        """Sets a config option following the ACP spec.
+
+        Primary: session/set_config_option (the standard method).
+        Fallback: session/set_mode if config category is 'mode'/'model' and
+                  set_config_option is unsupported by the agent.
+
+        Raises AgentExecutionError for real failures (e.g., "Agent not found").
+        """
         if not self._agent_session_id:
             return False
-        methods_to_try = [JsonRpcMethods.SESSION_SET_CONFIG]
-        if config_id == "model":
-            if self._successful_model_method:
-                methods_to_try = [self._successful_model_method] + methods_to_try
-            methods_to_try += [
-                JsonRpcMethods.SESSION_SET_MODE,
-                JsonRpcMethods.SESSION_SET_MODEL,
-                JsonRpcMethods.SESSION_SET_DASH_MODEL,
-            ]
 
-        for method in methods_to_try:
-            params = {"sessionId": self._agent_session_id}
-            if method == JsonRpcMethods.SESSION_SET_CONFIG:
-                params.update({"configId": config_id, "value": value})
-            elif method == JsonRpcMethods.SESSION_SET_MODE:
-                params.update({"modeId": value})
-            elif method in (
-                JsonRpcMethods.SESSION_SET_MODEL,
-                JsonRpcMethods.SESSION_SET_DASH_MODEL,
-            ):
-                params.update({"modelId": value})
+        if self._successful_config_method:
+            return await self._send_config(
+                self._successful_config_method, config_id, value
+            )
 
-            resp = await self.send_request(method, params)
+        self._suppress_stderr = True
+        try:
+            return await self._probe_config_method(config_id, value)
+        finally:
+            self._suppress_stderr = False
+            self._drain_error_queue()
+
+    async def _probe_config_method(self, config_id: str, value: Any) -> bool:
+        """Probes methods to find which one the agent supports, then caches it."""
+
+        resp = await self._send_config_request(
+            JsonRpcMethods.SESSION_SET_CONFIG, config_id, value
+        )
+        if not resp.error:
+            self._successful_config_method = JsonRpcMethods.SESSION_SET_CONFIG
+            if resp.result and "configOptions" in resp.result:
+                self._config_options = resp.result["configOptions"]
+            return True
+
+        if resp.error.get("code") != METHOD_NOT_FOUND_CODE:
+            self._raise_from_error(JsonRpcMethods.SESSION_SET_CONFIG, resp.error)
+
+        logger.debug("session/set_config_option not supported, trying session/set_mode")
+        category = self._get_config_category(config_id)
+        if category in ("mode", "model") or config_id in ("model", "mode"):
+            resp = await self._send_config_request(
+                JsonRpcMethods.SESSION_SET_MODE, config_id, value
+            )
             if not resp.error:
-                if config_id == "model":
-                    self._successful_model_method = method
+                self._successful_config_method = JsonRpcMethods.SESSION_SET_MODE
                 if resp.result and "configOptions" in resp.result:
                     self._config_options = resp.result["configOptions"]
                 return True
+
+            if resp.error.get("code") != METHOD_NOT_FOUND_CODE:
+                self._raise_from_error(JsonRpcMethods.SESSION_SET_MODE, resp.error)
+            logger.debug("session/set_mode also not supported")
+
         return False
+
+    async def _send_config(self, method: str, config_id: str, value: Any) -> bool:
+        """Sends a config request using a known-good cached method. Raises on error."""
+        resp = await self._send_config_request(method, config_id, value)
+        if not resp.error:
+            if resp.result and "configOptions" in resp.result:
+                self._config_options = resp.result["configOptions"]
+            return True
+        self._raise_from_error(method, resp.error)
+        return False  # unreachable, _raise_from_error always raises
+
+    async def _send_config_request(
+        self, method: str, config_id: str, value: Any
+    ) -> JsonRpcResponse:
+        """Builds params and sends the JSON-RPC request for a config method."""
+        params: Dict[str, Any] = {"sessionId": self._agent_session_id}
+        if method == JsonRpcMethods.SESSION_SET_CONFIG:
+            params.update({"configId": config_id, "value": value})
+        elif method == JsonRpcMethods.SESSION_SET_MODE:
+            params.update({"modeId": value})
+        return await self.send_request(method, params)
+
+    def _raise_from_error(self, method: str, error: Dict[str, Any]) -> None:
+        """Raises AgentExecutionError from a JSON-RPC error dict."""
+        message = error.get("message", "Unknown error")
+        details = error.get("data", {}).get("details", "")
+        full = f"{message}: {details}" if details else message
+        logger.error(f"Config method {method} failed: {full}")
+        raise AgentExecutionError(full)
+
+    def _drain_error_queue(self) -> None:
+        """Discards all items currently in the error queue."""
+        while not self._error_queue.empty():
+            try:
+                self._error_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break

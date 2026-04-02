@@ -57,3 +57,4 @@ Agents can use these variables to trigger notifications from background processe
 
 ## Development
 - Managed via `uv`. Use `uv add <dependency>` to manage requirements.
+- **CI Requirements**: ALWAYS run linting (`uv run ruff check .` and `uv run ruff format .`) and tests (`uv run pytest`) to ensure all checks pass before creating a Pull Request.

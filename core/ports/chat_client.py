@@ -23,6 +23,15 @@ class ChatClientProtocol(ABC):
         """Sends a plain message back to the session context (thread)."""
         pass
 
+    async def send_error(self, session: Session, content: str) -> None:
+        """Sends a formatted error message to the session context (thread).
+
+        Used for out-of-band errors that occur outside a prompt stream,
+        such as config failures or agent stderr errors.
+        Multi-line content should be wrapped in code blocks by the implementation.
+        """
+        pass
+
     @abstractmethod
     async def trigger_typing(self, session: Session) -> None:
         """Triggers the 'typing...' indicator in the chat interface."""

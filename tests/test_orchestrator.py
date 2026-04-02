@@ -11,6 +11,7 @@ from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
 class MockChatClient(ChatClientProtocol):
     def __init__(self):
         self.sent_messages = []
+        self.sent_errors = []
         self.streamed_chunks = []
         self.action_to_return = {
             "action": {"type": "text", "content": "This is the user's action"}
@@ -25,6 +26,9 @@ class MockChatClient(ChatClientProtocol):
 
     async def send_message(self, session: Session, content: str) -> None:
         self.sent_messages.append((session.id, content))
+
+    async def send_error(self, session: Session, content: str) -> None:
+        self.sent_errors.append((session.id, content))
 
     async def trigger_typing(self, session: Session) -> None:
         pass
