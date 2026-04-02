@@ -4,16 +4,19 @@ ACP-spec-correct set_config_option, and error surfacing to chat.
 """
 
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import AsyncGenerator, Dict, Any, Optional, List
+from unittest.mock import MagicMock
+from typing import AsyncGenerator, Dict, Any, List
 
 from core.models import Workspace, Session, ChatMessage, StreamChunk
 from core.orchestrator import SessionManager
 from core.ports.chat_client import ChatClientProtocol
 from core.ports.agent_client import AgentClientProtocol, PromptTurnCallback
 from core.exceptions import AgentExecutionError
-from adapters.agent.acp_stdio import AcpStdioAgent, JsonRpcMethods, METHOD_NOT_FOUND_CODE
+from adapters.agent.acp_stdio import (
+    AcpStdioAgent,
+    JsonRpcMethods,
+    METHOD_NOT_FOUND_CODE,
+)
 from adapters.agent.jsonrpc import JsonRpcResponse
 
 
@@ -121,8 +124,6 @@ class TestStderrSuppression:
 
         flag_values_during_probe = []
 
-        original_send = agent.send_request
-
         async def mock_send_request(method, params=None):
             # Capture the flag value when the request is sent
             flag_values_during_probe.append(agent._suppress_stderr)
@@ -188,7 +189,10 @@ class TestSetConfigOptionSpec:
             if method == JsonRpcMethods.SESSION_SET_CONFIG:
                 return JsonRpcResponse(
                     id=1,
-                    error={"code": METHOD_NOT_FOUND_CODE, "message": "Method not found"},
+                    error={
+                        "code": METHOD_NOT_FOUND_CODE,
+                        "message": "Method not found",
+                    },
                 )
             # set_mode succeeds
             return JsonRpcResponse(id=2, result={"configOptions": []})
@@ -283,6 +287,7 @@ class TestSetConfigOptionSpec:
     @pytest.mark.asyncio
     async def test_cached_path_skips_suppression(self, agent):
         """Cached method path should not toggle suppress/drain."""
+
         async def mock_send_request(method, params=None):
             return JsonRpcResponse(id=1, result={"configOptions": []})
 
@@ -364,6 +369,7 @@ class TestSessionContextErrorSurfacing:
         # Make the agent's start_session a no-op
         async def noop_start(session, workspace):
             pass
+
         error_agent.start_session = noop_start
 
         session = Session(id="s1", workspace_id="ws_1")
@@ -414,9 +420,7 @@ class TestErrorChunks:
         agent.process = MagicMock()
         agent.process.stdin = MagicMock()
 
-        prompt_response = JsonRpcResponse(
-            id=1, result={"stopReason": "success"}
-        )
+        prompt_response = JsonRpcResponse(id=1, result={"stopReason": "success"})
 
         async def mock_send_request(method, params=None):
             return prompt_response
@@ -424,9 +428,7 @@ class TestErrorChunks:
         agent.send_request = mock_send_request
 
         chunks = []
-        async for chunk in agent.prompt(
-            Session(id="s1", workspace_id="w1"), "test"
-        ):
+        async for chunk in agent.prompt(Session(id="s1", workspace_id="w1"), "test"):
             chunks.append(chunk)
 
         error_chunks = [c for c in chunks if c.type == "error"]

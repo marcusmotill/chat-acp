@@ -325,9 +325,7 @@ class AcpStdioAgent(AgentClientProtocol):
             stderr_buffer.clear()
 
             logger.warning(f"[AGENT STDERR] {combined}")
-            await self._error_queue.put(
-                StreamChunk(type="error", content=combined)
-            )
+            await self._error_queue.put(StreamChunk(type="error", content=combined))
 
         try:
             while True:
@@ -513,27 +511,21 @@ class AcpStdioAgent(AgentClientProtocol):
         if not self._agent_session_id:
             return False
 
-        # If we already know what works, use it directly (no probing needed)
         if self._successful_config_method:
             return await self._send_config(
                 self._successful_config_method, config_id, value
             )
 
-        # Probing phase — suppress stderr since failed probes cause the agent
-        # to log errors that are expected and already handled via JSON-RPC.
         self._suppress_stderr = True
         try:
             return await self._probe_config_method(config_id, value)
         finally:
             self._suppress_stderr = False
-            # Drain any stderr errors queued during probing — they're
-            # duplicates of what we already handled via JSON-RPC responses.
             self._drain_error_queue()
 
     async def _probe_config_method(self, config_id: str, value: Any) -> bool:
         """Probes methods to find which one the agent supports, then caches it."""
 
-        # 1. Try the ACP-standard method
         resp = await self._send_config_request(
             JsonRpcMethods.SESSION_SET_CONFIG, config_id, value
         )
@@ -544,13 +536,9 @@ class AcpStdioAgent(AgentClientProtocol):
             return True
 
         if resp.error.get("code") != METHOD_NOT_FOUND_CODE:
-            # Real error (not "method unsupported") — surface it
             self._raise_from_error(JsonRpcMethods.SESSION_SET_CONFIG, resp.error)
 
-        # 2. Legacy fallback: session/set_mode (only for mode/model configs)
-        logger.debug(
-            "session/set_config_option not supported, trying session/set_mode"
-        )
+        logger.debug("session/set_config_option not supported, trying session/set_mode")
         category = self._get_config_category(config_id)
         if category in ("mode", "model") or config_id in ("model", "mode"):
             resp = await self._send_config_request(
