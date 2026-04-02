@@ -420,7 +420,13 @@ class WorkspaceCog(commands.Cog):
     @commands.slash_command(
         name="model", description="Set the model for this workspace."
     )
-    async def model(self, ctx: discord.ApplicationContext):
+    async def model(
+        self,
+        ctx: discord.ApplicationContext,
+        search: discord.Option(
+            str, "Optional text to filter models", required=False, default=None
+        ),
+    ):
         if not self.bot.orchestrator:
             await ctx.respond("Error: Orchestrator not yet wired.", ephemeral=True)
             return
@@ -469,12 +475,40 @@ class WorkspaceCog(commands.Cog):
             )
             return
 
+        # Apply search filter and sort alphabetically
+        options = models[0].get("options", [])
+        if search:
+            options = [
+                o
+                for o in options
+                if search.lower() in str(o.get("value", "")).lower()
+                or search.lower() in str(o.get("name", "")).lower()
+            ]
+
+        def sort_key(o):
+            return str(o.get("value", ""))
+
+        options.sort(key=sort_key)
+        models[0]["options"] = options
+
+        if not options:
+            await ctx.followup.send(
+                f"❌ No models found matching `{search}`.",
+                ephemeral=True,
+            )
+            return
+
         # Create the selection view
         view = ModelSelectionView(
             self.bot.orchestrator, chat_workspace_id, chat_session_id, models[0]
         )
+        msg_text = (
+            f"⚙️ **Model Selection Walkthrough**\nSelect a model (filtering by '{search}'):"
+            if search
+            else "⚙️ **Model Selection Walkthrough**\nSelect a model:"
+        )
         await ctx.followup.send(
-            "⚙️ **Model Selection Walkthrough**\nSelect a model:",
+            msg_text,
             view=view,
             ephemeral=True,
         )
