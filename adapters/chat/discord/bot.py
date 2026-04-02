@@ -65,8 +65,12 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
             chat_session_id = str(message.channel.id)
             chat_session_name = message.channel.name
         elif self.user in message.mentions:
-            # If pinged in a normal channel, we just use the channel as the session context.
-            pass
+            # If pinged in a normal channel, we create a thread from their message
+            thread = await message.create_thread(
+                name="Agent Session", auto_archive_duration=1440
+            )
+            chat_session_id = str(thread.id)
+            chat_session_name = thread.name
         else:
             # Not a thread, not a mention. Ignore.
             return
