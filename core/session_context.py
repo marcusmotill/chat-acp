@@ -147,6 +147,15 @@ class SessionContext:
                 await self.agent.set_config_option(
                     self.session, "model", self.initial_model
                 )
+            except AgentException as e:
+                logger.warning(f"Failed to auto-apply model {self.initial_model}: {e}")
+                try:
+                    await self.chat_adapter.send_error(
+                        self.session,
+                        f"Failed to set saved model `{self.initial_model}`: {e}",
+                    )
+                except Exception:
+                    logger.debug("Could not send error to chat for model auto-apply")
             except Exception as e:
                 logger.warning(f"Failed to auto-apply model {self.initial_model}: {e}")
 

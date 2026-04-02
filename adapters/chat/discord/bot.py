@@ -159,6 +159,14 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
         if channel_or_thread:
             await channel_or_thread.send(content)
 
+    async def send_error(self, session: Session, content: str) -> None:
+        """Sends a formatted error message to the session thread."""
+        if "\n" in content:
+            formatted = f"⚠️ **Agent Error**:\n```\n{content}\n```"
+        else:
+            formatted = f"⚠️ **Agent Error**: {content}"
+        await self.send_message(session, formatted)
+
     async def notify(self, session: Session, message: str) -> None:
         """Sends a notification message to the session thread."""
         await self.send_message(session, f"🔔 **Notification**: {message}")
@@ -253,6 +261,13 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
                         thought_msg = await channel_or_thread.send(content)
                     else:
                         await thought_msg.edit(content=content)
+
+                elif chunk.type == "error":
+                    if "\n" in chunk.content:
+                        error_content = f"⚠️ **Agent Error**:\n```\n{chunk.content}\n```"
+                    else:
+                        error_content = f"⚠️ **Agent Error**: {chunk.content}"
+                    await channel_or_thread.send(error_content)
 
             # Final check for main content
             if current_main_content and not last_main_msg:

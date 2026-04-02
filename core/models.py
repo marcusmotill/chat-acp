@@ -45,7 +45,7 @@ class StreamChunk(BaseModel):
     A unified, structured representation of streaming output from the agent.
     """
 
-    type: Literal["text", "status", "thought"]
+    type: Literal["text", "status", "thought", "error"]
     content: str
 
 

@@ -153,7 +153,18 @@ class SessionManager:
             return False
 
         # 1. Update active agent
-        await context.agent.set_config_option(context.session, "model", model_id)
+        try:
+            await context.agent.set_config_option(context.session, "model", model_id)
+        except Exception as e:
+            logger.error(f"Failed to set model {model_id}: {e}")
+            try:
+                await self.chat_adapter.send_error(
+                    context.session,
+                    f"Failed to set model `{model_id}`: {e}",
+                )
+            except Exception:
+                logger.debug("Could not send error to chat for set_model")
+            return False
 
         # 2. Persist in config
         if self.config_registry:
