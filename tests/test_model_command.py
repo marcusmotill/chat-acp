@@ -11,7 +11,7 @@ async def test_model_command_sorting_and_search():
     bot.orchestrator_callback = AsyncMock()
 
     # Mock workspace and orchestrator
-    bot.orchestrator.get_workspace.return_value = MagicMock()
+    bot.orchestrator.get_workspace = MagicMock(return_value=MagicMock())
 
     # Mock get_available_models to return a mix of models
     models_response = [
@@ -68,7 +68,7 @@ async def test_model_command_search_filtering():
     bot = MagicMock(spec=DiscordCommandBot)
     bot.orchestrator = AsyncMock()
     bot.orchestrator_callback = AsyncMock()
-    bot.orchestrator.get_workspace.return_value = MagicMock()
+    bot.orchestrator.get_workspace = MagicMock(return_value=MagicMock())
 
     models_response = [
         {
