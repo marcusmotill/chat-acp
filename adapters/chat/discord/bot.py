@@ -475,7 +475,7 @@ class WorkspaceCog(commands.Cog):
             )
             return
 
-        # Apply search filter and sort to prioritize non-opencode models
+        # Apply search filter and sort alphabetically
         options = models[0].get("options", [])
         if search:
             options = [
@@ -486,8 +486,7 @@ class WorkspaceCog(commands.Cog):
             ]
 
         def sort_key(o):
-            val = str(o.get("value", ""))
-            return (1 if val.startswith("opencode/") else 0, val)
+            return str(o.get("value", ""))
 
         options.sort(key=sort_key)
         models[0]["options"] = options
