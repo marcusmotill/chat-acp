@@ -65,8 +65,7 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
             chat_session_id = str(message.channel.id)
             chat_session_name = message.channel.name
         elif self.user in message.mentions:
-            # If pinged in a normal channel, the orchestrator/adapter
-            # will create a thread during get_or_create_session.
+            # If pinged in a normal channel, we just use the channel as the session context.
             pass
         else:
             # Not a thread, not a mention. Ignore.
@@ -93,28 +92,11 @@ class DiscordCommandBot(commands.Bot, ChatClientProtocol):
         self, workspace: Workspace, context_id: str, title: str
     ) -> Session:
         """
-        If the message was in a standard channel, we create a thread to act as the session.
-        If it was already in a thread, we return that.
+        Returns the session for the given context.
+        The bot now replies in the same channel or thread it was invoked in,
+        rather than creating a new thread.
         """
-        workspace_channel = self.get_channel(int(workspace.id))
-        if not workspace_channel:
-            # Fallback if cache miss
-            workspace_channel = await self.fetch_channel(int(workspace.id))
-
-        new_session_id = context_id
-
-        # If the context is the workspace channel itself, create a thread
-        if context_id == workspace.id and isinstance(
-            workspace_channel, discord.TextChannel
-        ):
-            thread = await workspace_channel.create_thread(
-                name=title,
-                type=discord.ChannelType.public_thread,
-                auto_archive_duration=1440,
-            )
-            new_session_id = str(thread.id)
-
-        return Session(id=new_session_id, workspace_id=workspace.id)
+        return Session(id=context_id, workspace_id=workspace.id)
 
     async def get_history(self, session: Session, limit: int = 20) -> List[ChatMessage]:
         """Fetches history from the Discord thread/channel, including bot responses."""
