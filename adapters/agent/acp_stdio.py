@@ -23,6 +23,8 @@ class JsonRpcMethods:
     SESSION_CANCEL = "session/cancel"
     SESSION_SET_CONFIG = "session/set_config_option"
     SESSION_SET_MODE = "session/set_mode"
+    SESSION_SET_MODEL = "session/set_model"
+    SESSION_SET_DASH_MODEL = "session/set-model"
     PROMPT_TURN = "prompt_turn"
 
 
@@ -500,81 +502,73 @@ class AcpStdioAgent(AgentClientProtocol):
     async def set_config_option(
         self, session: Session, config_id: str, value: Any
     ) -> bool:
-        """Sets a config option following the ACP spec.
-
-        Primary: session/set_config_option (the standard method).
-        Fallback: session/set_mode if config category is 'mode'/'model' and
-                  set_config_option is unsupported by the agent.
-
-        Raises AgentExecutionError for real failures (e.g., "Agent not found").
+        """
+        Sets a configuration option for the session.
+        Uses a robust fallback strategy to try different ACP methods in order of preference.
         """
         if not self._agent_session_id:
             return False
 
-        if self._successful_config_method:
-            return await self._send_config(
-                self._successful_config_method, config_id, value
-            )
+        category = self._get_config_category(config_id)
+        is_model = category in ("mode", "model") or config_id in ("model", "mode")
 
+        # Define methods to try. Standard ACP first, then common legacy/extension methods for models.
+        methods = [JsonRpcMethods.SESSION_SET_CONFIG]
+        if is_model:
+            methods += [
+                JsonRpcMethods.SESSION_SET_MODE,
+                JsonRpcMethods.SESSION_SET_MODEL,
+                JsonRpcMethods.SESSION_SET_DASH_MODEL,
+            ]
+
+        last_error = None
         self._suppress_stderr = True
         try:
-            return await self._probe_config_method(config_id, value)
+            for method in methods:
+                resp = await self._send_config_request(method, config_id, value)
+                if not resp.error:
+                    # Success: update local config options if the agent returned them
+                    if resp.result and "configOptions" in resp.result:
+                        self._config_options = resp.result["configOptions"]
+                    return True
+
+                last_error = resp.error
+                if is_model:
+                    logger.debug(
+                        f"Attempt with {method} failed for {config_id}: {resp.error.get('message')}. "
+                        "Trying next fallback..."
+                    )
+                else:
+                    # Non-model settings are specialized; if the primary method fails, we don't guess.
+                    break
+
+            if last_error:
+                self._raise_from_error(methods[0], last_error)
+            return False
         finally:
             self._suppress_stderr = False
             self._drain_error_queue()
-
-    async def _probe_config_method(self, config_id: str, value: Any) -> bool:
-        """Probes methods to find which one the agent supports, then caches it."""
-
-        resp = await self._send_config_request(
-            JsonRpcMethods.SESSION_SET_CONFIG, config_id, value
-        )
-        if not resp.error:
-            self._successful_config_method = JsonRpcMethods.SESSION_SET_CONFIG
-            if resp.result and "configOptions" in resp.result:
-                self._config_options = resp.result["configOptions"]
-            return True
-
-        if resp.error.get("code") != METHOD_NOT_FOUND_CODE:
-            self._raise_from_error(JsonRpcMethods.SESSION_SET_CONFIG, resp.error)
-
-        logger.debug("session/set_config_option not supported, trying session/set_mode")
-        category = self._get_config_category(config_id)
-        if category in ("mode", "model") or config_id in ("model", "mode"):
-            resp = await self._send_config_request(
-                JsonRpcMethods.SESSION_SET_MODE, config_id, value
-            )
-            if not resp.error:
-                self._successful_config_method = JsonRpcMethods.SESSION_SET_MODE
-                if resp.result and "configOptions" in resp.result:
-                    self._config_options = resp.result["configOptions"]
-                return True
-
-            if resp.error.get("code") != METHOD_NOT_FOUND_CODE:
-                self._raise_from_error(JsonRpcMethods.SESSION_SET_MODE, resp.error)
-            logger.debug("session/set_mode also not supported")
-
-        return False
-
-    async def _send_config(self, method: str, config_id: str, value: Any) -> bool:
-        """Sends a config request using a known-good cached method. Raises on error."""
-        resp = await self._send_config_request(method, config_id, value)
-        if not resp.error:
-            if resp.result and "configOptions" in resp.result:
-                self._config_options = resp.result["configOptions"]
-            return True
-        self._raise_from_error(method, resp.error)
-        return False  # unreachable, _raise_from_error always raises
 
     async def _send_config_request(
         self, method: str, config_id: str, value: Any
     ) -> JsonRpcResponse:
         """Builds params and sends the JSON-RPC request for a config method."""
         params: Dict[str, Any] = {"sessionId": self._agent_session_id}
-        if method == JsonRpcMethods.SESSION_SET_CONFIG:
-            params.update({"configId": config_id, "value": value})
-        elif method == JsonRpcMethods.SESSION_SET_MODE:
-            params.update({"modeId": value})
+
+        # Map methods to their specific parameter keys
+        key_map = {
+            JsonRpcMethods.SESSION_SET_CONFIG: ("configId", config_id),
+            JsonRpcMethods.SESSION_SET_MODE: ("modeId", value),
+            JsonRpcMethods.SESSION_SET_MODEL: ("modelId", value),
+            JsonRpcMethods.SESSION_SET_DASH_MODEL: ("modelId", value),
+        }
+
+        if method in key_map:
+            key, val = key_map[method]
+            params[key] = val
+            if method == JsonRpcMethods.SESSION_SET_CONFIG:
+                params["value"] = value
+
         return await self.send_request(method, params)
 
     def _raise_from_error(self, method: str, error: Dict[str, Any]) -> None:

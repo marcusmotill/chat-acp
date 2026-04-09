@@ -129,7 +129,7 @@ class TestStderrSuppression:
             flag_values_during_probe.append(agent._suppress_stderr)
             return JsonRpcResponse(
                 id=1,
-                error={"code": METHOD_NOT_FOUND_CODE, "message": "Method not found"},
+                result={"configOptions": []},
             )
 
         agent.send_request = mock_send_request
@@ -263,16 +263,17 @@ class TestSetConfigOptionSpec:
 
         agent.send_request = mock_send_request
 
-        result = await agent.set_config_option(
-            Session(id="s1", workspace_id="w1"), "model", "gpt-4"
-        )
-
-        assert result is False
-        # Only spec methods should be tried
+        with pytest.raises(AgentExecutionError):
+            await agent.set_config_option(
+                Session(id="s1", workspace_id="w1"), "model", "gpt-4"
+            )
+        # Only spec and common extension methods should be tried
         for method_called in calls:
             assert method_called in (
                 JsonRpcMethods.SESSION_SET_CONFIG,
                 JsonRpcMethods.SESSION_SET_MODE,
+                JsonRpcMethods.SESSION_SET_MODEL,
+                JsonRpcMethods.SESSION_SET_DASH_MODEL,
             ), f"Unexpected method called: {method_called}"
 
     @pytest.mark.asyncio
@@ -309,7 +310,9 @@ class TestSetConfigOptionSpec:
         agent._drain_error_queue = spy_drain
         await agent.set_config_option(session, "model", "gpt-3.5")
 
-        assert not suppress_was_set, "Cached path should not drain error queue"
+        # Since we removed caching, every call will probe/toggle suppression.
+        # This is expected for robustness across different config categories.
+        assert suppress_was_set is True
 
 
 # ──────────────────────────────────────────────────────────────────────
